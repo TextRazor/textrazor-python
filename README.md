@@ -3,9 +3,9 @@ textrazor-python
 
 Python SDK for the TextRazor Text Analytics API. 
 
-TextRazor offers a comprehensive suite of state-of-the-art natural language processing functionality, with easy integration into your applications in minutes.  TextRazor helps hundreds of applications understand unstructured content across a range of verticals, with use cases including social media monitoring, enterprise search, recommendation systems and ad targetting.  
+TextRazor offers state-of-the-art natural language processing tools through a simple API, allowing you to build semantic technology into your applications in minutes.  
 
-Read more about the TextRazor API at [https://www.textrazor.com](https://www.textrazor.com).
+Hundreds of applications rely on TextRazor to understand unstructured text across a range of verticals, with use cases including social media monitoring, enterprise search, recommendation systems and ad targetting.  
 
 Getting Started
 ===============
