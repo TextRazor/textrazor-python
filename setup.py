@@ -6,7 +6,9 @@ TextRazor
 
 The official Python SDK for the TextRazor Text Analytics API (https://textrazor.com).
 
-TextRazor makes it easy to build Named Entity Extraction, Disambiguation and Linking, Word Sense Disambiguation, Topic Classification, Relation Extraction and many other Natural Language Processing features into your applicaton.
+TextRazor offers a comprehensive suite of state-of-the-art natural language processing functionality, with easy integration into your applications in minutes. TextRazor helps hundreds of applications understand unstructured content across a range of verticals, with use cases including social media monitoring, enterprise search, recommendation systems and ad targetting.
+
+Read more about the TextRazor API at https://www.textrazor.com.
 
 """
 
