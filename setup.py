@@ -21,9 +21,8 @@ setup(
     author_email='toby@textrazor.com',
     url='https://textrazor.com/',
     license='MIT',
-    packages=find_packages(),
+    py_modules=['textrazor'],
     classifiers=[
-        'Development Status :: 4 - Beta',
         'License :: OSI Approved :: MIT License',
         'Operating System :: OS Independent',
         'Programming Language :: Python',

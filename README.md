@@ -24,7 +24,7 @@ pip install textrazor
 from textrazor import TextRazor
 
 client = TextRazor(YOUR_API_KEY_HERE, extractors=["entities"])
-response = client.analyze_url("http://www.bbc.co.uk/news/uk-politics-18640916")
+response = client.analyze("Barclays misled shareholders and the public about one of the biggest investments in the bank's history, a BBC Panorama investigation has found.")
 
 for entity in response.entities():
 	print entity
