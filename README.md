@@ -1,5 +1,5 @@
-textrazor-python
-================
+TextRazor Python SDK
+====================
 
 Python SDK for the TextRazor Text Analytics API. 
 
