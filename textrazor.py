@@ -181,10 +181,10 @@ class Entity(object):
         return self._response_entity.get("type", [])
     
     def __repr__(self):
-        return "TextRazor Entity %s at positions %s" % (str(self.id), str(self.matched_positions))
+        return "TextRazor Entity %s at positions %s" % (self.id.encode("utf-8"), str(self.matched_positions))
 
     def __str__(self):
-        out = ["TextRazor Entity with id:", str(self.id), "\n"]
+        out = ["TextRazor Entity with id:", self.id.encode("utf-8"), "\n"]
         
         for property in dir(self):
             if not property.startswith("_") and not property == "id":
