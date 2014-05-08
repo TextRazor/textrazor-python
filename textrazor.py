@@ -179,7 +179,12 @@ class Entity(object):
     def dbpedia_types(self):
         """Returns a list of dbpedia types for this entity, or an empty list if there are none."""
         return self._response_entity.get("type", [])
-    
+
+    @property
+    def data(self):
+        """ Returns a dictionary containing enriched data found for this entity. """
+        return self._response_entity.get("data", {})
+
     def __repr__(self):
         return "TextRazor Entity %s at positions %s" % (self.id.encode("utf-8"), str(self.matched_positions))
 
@@ -936,8 +941,10 @@ class TextRazor(object):
         self.cleanup_html = False
         self.rules = ""
         self.language_override = None
+        self.enrichment_queries = []
         self.dbpedia_type_filters = []
         self.freebase_type_filters = []
+        self.allow_overlap = None
     
     def set_api_key(self, api_key): 
         """Sets the TextRazor API key, required for all requests."""
@@ -965,6 +972,11 @@ class TextRazor(object):
         """When True, all communication to TextRazor will be sent over SSL, when handling sensitive
         or private information this should be set to True.  Defaults to False."""
         self.do_encryption = do_encryption
+
+    def set_enrichment_queries(self, enrichment_queries):
+        """Set a list of "Enrichment Queries", used to enrich the entity response with structured linked data.
+        The syntax for these queries is documented at https://www.textrazor.com/enrichment """
+        self.enrichment_queries = enrichment_queries
         
     def set_language_override(self, language_override):
         self.language_override = language_override
@@ -976,6 +988,11 @@ class TextRazor(object):
         in individual words apply to the clean text, not the provided HTML.""" 
         self.cleanup_html = cleanup_html
     
+    def set_entity_allow_overlap(self, allow_overlap):
+        """When allow_overlap is True, entities in the response may overlap.  When False, the "best" entity
+        is found such that none overlap. Defaults to True. """
+        self.allow_overlap = allow_overlap
+
     def set_entity_dbpedia_type_filters(self, filters):
         """Set a list of DBPedia types to filter entity extraction on.  All returned entities must
         match at least one of these types."""
@@ -1014,13 +1031,19 @@ class TextRazor(object):
         
         for filter in self.dbpedia_type_filters:
             post_data.append(("entities.filterDbpediaTypes", filter))
-            
+        
         for filter in self.freebase_type_filters:
             post_data.append(("entities.filterFreebaseTypes", filter))
         
+        for query in self.enrichment_queries:
+            post_data.append(("entities.enrichmentQueries", query))
+
         if self.language_override != None:
             post_data.append(("languageOverride", self.language_override))
-        
+
+        if self.allow_overlap != None:
+            post_data.append(("entities.allowOverlap", self.allow_overlap))
+
         encoded_post_data = urllib.urlencode(post_data)
         
         request_headers = {}
