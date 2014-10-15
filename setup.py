@@ -16,7 +16,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='textrazor',
-    version='1.0.1',
+    version='1.0.2',
     description='Official Python SDK for TextRazor (https://textrazor.com).',
     long_description=__doc__,
     author='Toby Crayston',

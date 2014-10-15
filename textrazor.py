@@ -1,5 +1,5 @@
 """
-Copyright (c) 2013 TextRazor, http://textrazor.com/
+Copyright (c) 2014 TextRazor, http://textrazor.com/
 
 Permission is hereby granted, free of charge, to any person obtaining 
 a copy of this software and associated documentation files (the "Software"), 
@@ -21,8 +21,14 @@ THE SOFTWARE.
 
 """
 
-import urllib
-import urllib2
+try:
+    from urllib2 import Request, urlopen, HTTPError, URLError
+    from urllib import urlencode
+except ImportError:
+    from urllib.request import Request, urlopen
+    from urllib.parse import urlencode
+    from urllib.error import HTTPError, URLError
+
 import re
 
 try:
@@ -31,9 +37,12 @@ except ImportError:
     import json
     
 try:   
-    import cStringIO as StringIO
+    import cStringIO.StringIO as IOStream
 except ImportError:
-    import StringIO
+    try:
+        import StringIO.StringIO as IOStream
+except ImportError:
+        from io import BytesIO as IOStream
 
 import gzip
 
@@ -101,7 +110,7 @@ class Entity(object):
         for position in self.matched_positions:
             try:
                 link_index[("word", position)].append((self._register_link, None))
-            except KeyError, ex:
+            except KeyError as ex:
                 link_index[("word", position)] = [(self._register_link, None)]
         
     def _register_link(self, dummy, word):
@@ -214,7 +223,7 @@ class Entailment(object):
         for position in self.matched_positions:
             try:
                 link_index[("word", position)].append((self._register_link, None))
-            except KeyError, ex:
+            except KeyError as ex:
                 link_index[("word", position)] = [(self._register_link, None)]
         
     def _register_link(self, dummy, word):
@@ -285,7 +294,7 @@ class RelationParam(object):
         for position in self.param_positions:
             try:
                 link_index[("word", position)].append((self._register_link, None))
-            except KeyError, ex:
+            except KeyError as ex:
                 link_index[("word", position)] = [(self._register_link, None)]
         
     def _register_link(self, dummy, word):
@@ -343,7 +352,7 @@ class NounPhrase(object):
         for position in self.word_positions:
             try:
                 link_index[("word", position)].append((self._register_link, None))
-            except KeyError, ex:
+            except KeyError as ex:
                 link_index[("word", position)] = [(self._register_link, None)]
         
     def _register_link(self, dummy, word):
@@ -395,13 +404,13 @@ class Property(object):
         for position in self.predicate_positions:
             try:
                 link_index[("word", position)].append((self._register_link, True))
-            except KeyError, ex:
+            except KeyError as ex:
                 link_index[("word", position)] = [(self._register_link, True)]
                 
         for position in self.property_positions:
             try:
                 link_index[("word", position)].append((self._register_link, False))
-            except KeyError, ex:
+            except KeyError as ex:
                 link_index[("word", position)] = [(self._register_link, False)]
         
     def _register_link(self, is_predicate, word):
@@ -468,7 +477,7 @@ class Relation(object):
         for position in self.predicate_positions:
             try:
                 link_index[("word", position)].append((self._register_link, None))
-            except KeyError, ex:
+            except KeyError as ex:
                 link_index[("word", position)] = [(self._register_link, None)]
         
      
@@ -705,7 +714,7 @@ class Sentence(object):
         
         for word in self._words:
             parent_position = word.parent_position
-            if parent_position >= 0:
+            if None != parent_position and parent_position >= 0:
                 word._set_parent(word_positions[parent_position])
             else:
                 # Punctuation does not get attached to any parent, any non punctuation part of speech
@@ -732,7 +741,7 @@ class CustomAnnotation(object):
             for link in key_value.get("links", []):
                 try:
                     link_index[(link["annotationName"], link["linkedId"])].append((self._register_link, link))
-                except Exception, ex:
+                except Exception as ex:
                     link_index[(link["annotationName"], link["linkedId"])] = [(self._register_link, link)]
     
     def _register_link(self, link, annotation): 
@@ -741,7 +750,7 @@ class CustomAnnotation(object):
         new_custom_annotation_list = []
         try:
             new_custom_annotation_list = getattr(annotation, self.name());
-        except Exception, ex:
+        except Exception as ex:
             pass
         new_custom_annotation_list.append(self)
         setattr(annotation, self.name(), new_custom_annotation_list)
@@ -757,7 +766,7 @@ class CustomAnnotation(object):
                 for link in key_value.get("links", []):
                     try:
                         yield link["linked"]
-                    except Exception, ex:
+                    except Exception as ex:
                         yield link
                 for int_value in key_value.get("intValue", []):
                     yield int_value
@@ -780,7 +789,7 @@ class CustomAnnotation(object):
         for key_value in self._annotation_json["contents"]:
             try:
                 out.append("Param %s:" % key_value["key"])
-            except Exception, ex:
+            except Exception as ex:
                 out.append("Param (unlabelled):")
             out.append("\n")
             for link in self.__getattr__(key_value["key"]):
@@ -1010,8 +1019,8 @@ class TextRazor(object):
         
         Returns a :class:`TextRazorResponse` with the parsed data on success.  
         Raises a :class:`TextRazorAnalysisException` on failure. """
-        req = urllib2.Request(url, headers=headers)
-        response = urllib2.urlopen(req)
+        req = Request(url, headers=headers)
+        response = urlopen(req)
         
         text = response.read().decode("utf-8", "ignore")
        
@@ -1044,7 +1053,7 @@ class TextRazor(object):
         if self.allow_overlap != None:
             post_data.append(("entities.allowOverlap", self.allow_overlap))
 
-        encoded_post_data = urllib.urlencode(post_data)
+        encoded_post_data = urlencode(post_data)
         
         request_headers = {}
         
@@ -1052,19 +1061,19 @@ class TextRazor(object):
             request_headers['Accept-encoding'] = 'gzip'
         
         if self.do_encryption:
-            request = urllib2.Request(self._SECURE_TEXTRAZOR_ENDPOINT, headers=request_headers, data=encoded_post_data)
+            request = Request(self._SECURE_TEXTRAZOR_ENDPOINT, headers=request_headers, data=encoded_post_data.encode("utf-8"))
         else:
-            request = urllib2.Request(self._TEXTRAZOR_ENDPOINT, headers=request_headers, data=encoded_post_data)
+            request = Request(self._TEXTRAZOR_ENDPOINT, headers=request_headers, data=encoded_post_data.encode("utf-8"))
         
         try:
-            response = urllib2.urlopen(request)
-        except urllib2.HTTPError, e:
+            response = urlopen(request)
+        except HTTPError as e:
             raise TextRazorAnalysisException("TextRazor returned HTTP Code %d: %s" % (e.code, e.read()))
-        except urllib2.URLError, e:
+        except URLError as e:
             raise TextRazorAnalysisException("Could not connect to TextRazor")
      
         if response.info().get('Content-Encoding') == 'gzip':
-            buf = StringIO.StringIO( response.read())
+            buf = IOStream( response.read())
             response = gzip.GzipFile(fileobj=buf)
         
         response_json = json.loads(response.read().decode("utf-8"))
