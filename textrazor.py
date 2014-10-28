@@ -41,7 +41,7 @@ try:
 except ImportError:
     try:
         import StringIO.StringIO as IOStream
-except ImportError:
+    except ImportError:
         from io import BytesIO as IOStream
 
 import gzip
