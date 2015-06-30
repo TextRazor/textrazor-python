@@ -47,7 +47,7 @@ except ImportError:
 
 import gzip
 
-class TextRazorAnalysisException(BaseException):
+class TextRazorAnalysisException(Exception):
     pass
 
 class Topic(object):
