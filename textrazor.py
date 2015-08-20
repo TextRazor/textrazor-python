@@ -1,5 +1,5 @@
 """
-Copyright (c) 2014 TextRazor, http://textrazor.com/
+Copyright (c) 2015 TextRazor, https://www.textrazor.com/
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the "Software"),
@@ -46,8 +46,163 @@ except ImportError:
         from io import BytesIO as IOStream
 
 import gzip
+import zlib
 
-class TextRazorAnalysisException(Exception):
+# These options don't usually change much within a user's app,
+# for convenience allow them to set global defaults for connection options.
+
+api_key = None
+do_compression = True
+do_encryption = True
+
+# Endpoints aren't usually changed by an end user, but helpful to
+# have as an option for debug purposes.
+
+_SECURE_TEXTRAZOR_ENDPOINT = "https://api.textrazor.com/"
+_TEXTRAZOR_ENDPOINT = "http://api.textrazor.com/"
+
+def _chunks(l, n):
+    n = max(1, n)
+    return (l[i:i + n] for i in range(0, len(l), n))
+
+class proxy_response_json(object):
+    """ Helper class to provide a transparent proxy for python properties
+    with easy access to an underlying json document. This is to avoid unneccesary
+    copying of the response, while explictly exposing the expected response fields
+    and documentation."""
+
+    def __init__(self, attr_name, default=None, doc=None):
+        self.attr_name = attr_name
+        self.default = default
+
+        if doc: self.__doc__ = doc
+
+    def __get__(self, instance, owner=None):
+        return instance.json.get(self.attr_name, self.default)
+
+    def __set__(self, instance, value):
+        instance.json[self.attr_name] = value
+
+class proxy_member(object):
+    """ Slightly redundant given the property decorator, but saves some space
+    and makes non-json property access consistent with the above. """
+
+    def __init__(self, attr_name, doc=None):
+        self.attr_name = attr_name
+
+        if doc: self.__doc__ = doc
+
+    def __get__(self, instance, owner=None):
+        return getattr(instance, self.attr_name)
+
+class generate_str(object):
+    def __init__(self, banned_properties = []):
+        self.banned_properties = banned_properties
+
+    def __get__(self, instance, owner=None):
+        out = ["TextRazor ", type(instance).__name__]
+
+        try:
+            encoded_id = self.id.encode("utf-8")
+            out.extend([" with id:", encoded_id, "\n"])
+        except Exception, ex:
+            out.extend([":\n",])
+
+        for property in dir(instance):
+            if not property.startswith("_") and not property == "id" and not property in self.banned_properties:
+                out.extend([property, ":", repr(getattr(instance, property)), "\n"])
+
+        return " ".join(out)
+
+class TextRazorConnection(object):
+
+    def __init__(self, local_api_key=None, local_do_compression=None, local_do_encryption=None):
+        global api_key, do_compression, do_encryption, _TEXTRAZOR_ENDPOINT, _SECURE_TEXTRAZOR_ENDPOINT
+
+        self.api_key = local_api_key
+        self.do_compression = local_do_compression
+        self.do_encryption = local_do_encryption
+
+        self.endpoint = _TEXTRAZOR_ENDPOINT
+        self.secure_endpoint = _SECURE_TEXTRAZOR_ENDPOINT
+
+        if None == self.api_key: self.api_key = api_key
+        if None == self.do_compression: self.do_compression = do_compression
+        if None == self.do_encryption: self.do_encryption = do_encryption
+
+    def set_api_key(self, api_key):
+        """Sets the TextRazor API key, required for all requests."""
+        self.api_key = api_key
+
+    def set_do_compression(self, do_compression):
+        """When True, request gzipped responses from TextRazor.  When expecting a large response this can
+        significantly reduce bandwidth.  Defaults to True."""
+        self.do_compression = do_compression
+
+    def set_do_encryption(self, do_encryption):
+        """When True, all communication to TextRazor will be sent over SSL, when handling sensitive
+        or private information this should be set to True.  Defaults to False."""
+        self.do_encryption = do_encryption
+
+    def _build_request_headers(self, do_request_compression=False):
+        request_headers = {
+            'X-TextRazor-Key' : self.api_key
+        }
+
+        if self.do_compression:
+            request_headers['Accept-Encoding'] = 'gzip'
+
+        if do_request_compression:
+            request_headers['Content-Encoding'] = 'gzip'
+
+        return request_headers
+
+    def do_request(self, path, post_data=None, content_type=None, method="GET"):
+        # Where compression is enabled, TextRazor supports compression of both request and response bodys.
+        # Request compression can result in a significant decrease in processing time, especially for
+        # larger documents.
+        do_request_compression = False
+
+        encoded_post_data = None
+        if post_data:
+            encoded_post_data = post_data.encode("utf-8")
+
+            # Don't do request compression for small/empty bodies
+            do_request_compression = self.do_compression and encoded_post_data and len(encoded_post_data) > 50
+
+        request_headers = self._build_request_headers(do_request_compression)
+
+        if content_type:
+            request_headers['Content-Type'] = content_type
+
+        if self.do_encryption:
+            endpoint = self.secure_endpoint
+        else:
+            endpoint = self.endpoint
+
+        url = "".join([endpoint, path])
+
+        if do_request_compression:
+            encoded_post_data = zlib.compress(encoded_post_data)
+
+        request = Request(url.encode("utf-8"), headers=request_headers, data=encoded_post_data)
+        request.get_method = lambda: method
+
+        try:
+            response = urlopen(request)
+        except HTTPError as e:
+            raise TextRazorAnalysisException("TextRazor returned HTTP Code %d: %s" % (e.code, e.read()))
+        except URLError as e:
+            raise TextRazorAnalysisException("Could not connect to TextRazor")
+
+        if response.info().get('Content-Encoding') == 'gzip':
+            buf = IOStream(response.read())
+            response = gzip.GzipFile(fileobj=buf)
+
+        response_text = response.read().decode("utf-8")
+        return json.loads(response_text)
+
+class TextRazorAnalysisException(BaseException):
     pass
 
 class Topic(object):
@@ -57,43 +212,22 @@ class Topic(object):
     """
 
     def __init__(self, topic_json, link_index):
-        self._topic_json = topic_json
+        self.json = topic_json
 
         for callback, arg in link_index.get(("topic", self.id), []):
             callback(arg, self)
 
-    @property
-    def id(self):
-        """The unique id of this annotation within its annotation set. """
-        return self._topic_json.get("id", None)
+    id = proxy_response_json("id", None, """The unique id of this Topic within the result set.""")
 
-    @property
-    def label(self):
-        """Returns the label for this topic."""
-        return self._topic_json.get("label", "")
+    label = proxy_response_json("label", None, """The label of this Topic.""")
 
-    @property
-    def wikipedia_link(self):
-        """Returns a link to Wikipedia for this topic, or None if this topic
-        couldn't be linked to a wikipedia page."""
-        return self._topic_json.get("wikiLink", None)
+    wikipedia_link = proxy_response_json("wikiLink", None, """A link to Wikipedia for this topic, or None if this Topic couldn't be linked to a Wikipedia page.""")
 
-    @property
-    def score(self):
-        """Returns the relevancy score of this topic to the query document."""
-        return self._topic_json.get("score", 0)
+    score = proxy_response_json("label", None, """The contextual relevance of this Topic to your document.""")
 
-    def __repr__(self):
-        return "TextRazor Topic %s with label %s" % (str(self.id), str(self.label))
+    __str__ = generate_str()
 
-    def __str__(self):
-        out = ["TextRazor Topic %s and label %s:" % (str(self.id), str(self.label)), "\n"]
-
-        for property in dir(self):
-            if not property.startswith("_") and not property == "id":
-                out.extend([property, ":", repr(getattr(self, property)), "\n"])
-
-        return " ".join(out)
+    def __repr__(self): return "TextRazor Topic %s with label %s" % (str(self.id), str(self.label))
 
 class Entity(object):
     """Represents a single "Named Entity" extracted from the input text.
@@ -102,7 +236,7 @@ class Entity(object):
     """
 
     def __init__(self, entity_json, link_index):
-        self._response_entity = entity_json
+        self.json = entity_json
         self._matched_words = []
 
         for callback, arg in link_index.get(("entity", self.document_id), []):
@@ -118,94 +252,55 @@ class Entity(object):
         self._matched_words.append(word)
         word._add_entity(self)
 
-    @property
-    def document_id(self):
-        return self._response_entity.get("id", None)
+    custom_entity_id = proxy_response_json("customEntityId", "", """
+    The custom entity DictionaryEntry id that matched this Entity,
+    if this entity was matched in a custom dictionary.""")
 
-    @property
-    def id(self):
-        """Returns the disambiguated ID for this entity, or None if this entity
-        could not be disambiguated. """
-        return self._response_entity.get("entityId", None)
+    document_id = proxy_response_json("id", None)
 
-    @property
-    def freebase_id(self):
-        """Returns the disambiguated Freebase ID for this entity, or None if either
-        this entity could not be disambiguated, or a Freebase link doesn't exist."""
-        return self._response_entity.get("freebaseId", None)
+    id = proxy_response_json("entityId", None, "The disambiguated Wikipedia ID for this entity, or None if this entity could not be disambiguated.")
 
-    @property
-    def wikipedia_link(self):
-        """Returns a link to Wikipedia for this entity, or None if either this entity
-        could not be disambiguated or a Wikipedia link doesn't exist."""
-        return self._response_entity.get("wikiLink", None)
+    freebase_id = proxy_response_json("freebaseId", None, "The disambiguated Freebase ID for this entity, or None if either this entity could not be disambiguated, or has no Freebase link.")
 
-    @property
-    def matched_text(self):
-        """Returns the source text string that matched this entity."""
-        return self._response_entity.get("matchedText", None)
+    wikidata_id = proxy_response_json("wikidataId", None, "The disambiguated Wikidata QID for this entity, or None if either this entity could not be disambiguated, or has no Freebase link.")
 
-    @property
-    def starting_position(self):
-        return self._response_entity.get("startingPos", None)
+    wikipedia_link = proxy_response_json("wikiLink", None, "Link to Wikipedia for this entity, or None if either this entity could not be disambiguated or a Wikipedia link doesn't exist.")
 
-    @property
-    def ending_position(self):
-        return self._response_entity.get("endingPos", None)
+    matched_text = proxy_response_json("matchedText", None, "The source text string that matched this entity")
 
-    @property
-    def matched_positions(self):
-        """Returns a list of the token positions in the current sentence that make up this entity."""
-        return self._response_entity.get("matchingTokens", [])
+    starting_position = proxy_response_json("startingPos", None, "The character offset in the unicode source text that marks the start of this entity.")
+
+    ending_position = proxy_response_json("endingPos", None, "The character offset in the unicode source text that marks the end of this entity.")
+
+    matched_positions = proxy_response_json("matchingTokens", [], "List of the token positions in the current sentence that make up this entity.")
+
+    freebase_types = proxy_response_json("freebaseTypes", [], "List of Freebase types for this entity, or an empty list if there are none.")
+
+    dbpedia_types = proxy_response_json("type", [], "List of Dbpedia types for this entity, or an empty list if there are none.")
+
+    relevance_score = proxy_response_json("relevanceScore", None, """The relevance this entity has to the source text. This is a float on a scale of 0 to 1, with 1 being the most relevant.
+    Relevance is computed using a number contextual clues found in the entity context and facts in the TextRazor knowledgebase.""")
+
+    confidence_score = proxy_response_json("confidenceScore", None, """
+    The confidence that TextRazor is correct that this is a valid entity. TextRazor uses an ever increasing
+    number of signals to help spot valid entities, all of which contribute to this score. These include the contextual
+    agreement between the words in the source text and our knowledgebase, agreement between other entities in the text,
+    agreement between the expected entity type and context, and prior probabilities of having seen this entity across Wikipedia
+    and other web datasets. The score ranges from 0.5 to 10, with 10 representing the highest confidence that this is
+    a valid entity.""")
+
+    data = proxy_response_json("data", {}, """Dictionary containing enriched data found for this entity.
+    This is either as a result of an enrichment query, or as uploaded as part of a custom Entity Dictionary.""")
 
     @property
     def matched_words(self):
         """Returns a list of :class:`Word` that make up this entity."""
         return self._matched_words
 
-    @property
-    def freebase_types(self):
-        """Returns a list of Freebase types for this entity, or an empty list if there are none."""
-        return self._response_entity.get("freebaseTypes", [])
-
-    @property
-    def relevance_score(self):
-        """Returns the relevance this entity has to the source text.  This is a float on a scale of 0 to 1,
-        with 1 being the most relevant.  Relevance is determined by the contextual similarity between the entities
-        context and facts in the TextRazor knowledgebase."""
-        return self._response_entity.get("relevanceScore", None)
-
-    @property
-    def confidence_score(self):
-        """Returns the confidence that TextRazor is correct that this is a valid entity.  TextRazor uses an ever increasing
-        number of signals to help spot valid entities, all of which contribute to this score.  These include the contextual
-        agreement between the words in the source text and our knowledgebase, agreement between other entities in the text,
-        agreement between the expected entity type and context, prior probabilities of having seen this entity across wikipedia
-        and other web datasets.  The score ranges from 0.5 to 10, with 10 representing the highest confidence that this is
-        a valid entity."""
-        return self._response_entity.get("confidenceScore", None)
-
-    @property
-    def dbpedia_types(self):
-        """Returns a list of dbpedia types for this entity, or an empty list if there are none."""
-        return self._response_entity.get("type", [])
-
-    @property
-    def data(self):
-        """ Returns a dictionary containing enriched data found for this entity. """
-        return self._response_entity.get("data", {})
-
     def __repr__(self):
         return "TextRazor Entity %s at positions %s" % (self.id.encode("utf-8"), str(self.matched_positions))
 
-    def __str__(self):
-        out = ["TextRazor Entity with id:", self.id.encode("utf-8"), "\n"]
-
-        for property in dir(self):
-            if not property.startswith("_") and not property == "id":
-                out.extend([property, ":", repr(getattr(self, property)), "\n"])
-
-        return " ".join(out)
+    __str__ = generate_str()
 
 
 class Entailment(object):
@@ -215,7 +310,7 @@ class Entailment(object):
     """
 
     def __init__(self, entailment_json, link_index):
-        self.entailment_json = entailment_json
+        self.json = entailment_json
         self._matched_words = []
 
         for callback, arg in link_index.get(("entailment", self.id), []):
@@ -231,56 +326,32 @@ class Entailment(object):
         self._matched_words.append(word)
         word._add_entailment(self)
 
-    @property
-    def matched_positions(self):
-        """Returns the token positions in the current sentence that generated this entailment."""
-        return self.entailment_json.get("wordPositions", [])
+    id = proxy_response_json("id", None, "The unique id of this Entailment within the result set.")
+
+    matched_positions = proxy_response_json("wordPositions", [], "The token positions in the current sentence that generated this entailment.")
+
+    prior_score = proxy_response_json("priorScore", None, "The score of this entailment independent of the context it is used in this sentence.")
+
+    context_score = proxy_response_json("contextScore", None, "Score of this entailment given the source word's usage in its sentence and the entailed word's usage in our knowledgebase")
+
+    score = proxy_response_json("score", None, "TextRazor's overall confidence that this is a valid entailment, a combination of the prior and context score")
 
     @property
     def matched_words(self):
-        """Returns links the :class:`Word` in the current sentence that generated this entailment."""
+        """The :class:`Word` in the current sentence that generated this entailment."""
         return self._matched_words
 
     @property
-    def id(self):
-        """The unique id of this annotation within its annotation set. """
-        return self.entailment_json.get("id", None)
-
-    @property
-    def prior_score(self):
-        """Returns the score of this entailment independent of the context it is used in this sentence."""
-        return self.entailment_json.get("priorScore", None)
-
-    @property
-    def context_score(self):
-        """Returns the score of agreement between the source word's usage in this sentence and the entailed words
-        usage in our knowledgebase."""
-        return self.entailment_json.get("contextScore", None)
-
-    @property
-    def score(self):
-        """Returns the overall confidence that TextRazor is correct that this is a valid entailment, a combination
-        of the prior and context score."""
-        return self.entailment_json.get("score", None)
-
-    @property
     def entailed_word(self):
-        """Returns the word string that is entailed by the source words."""
-        entailed_tree = self.entailment_json.get("entailedTree", None)
+        """The word string that is entailed by the source words."""
+        entailed_tree = self.json.get("entailedTree", None)
         if entailed_tree:
             return entailed_tree.get("word", None)
 
     def __repr__(self):
         return "TextRazor Entailment:\"%s\" at positions %s" % (str(self.entailed_word), str(self.matched_positions))
 
-    def __str__(self):
-        out = ["TextRazor Entailment:", str(self.entailed_word), "\n"]
-
-        for property in dir(self):
-            if not property.startswith("_") and not property == "id":
-                out.extend([property, ":", repr(getattr(self, property)), "\n"])
-
-        return " ".join(out)
+    __str__ = generate_str()
 
 class RelationParam(object):
     """Represents a Param to a specific :class:`Relation`.
@@ -288,7 +359,7 @@ class RelationParam(object):
     Requires the "relations" extractor to be added to the TextRazor request."""
 
     def __init__(self, param_json, relation_parent, link_index):
-        self._param_json = param_json
+        self.json = param_json
         self._relation_parent = relation_parent
         self._param_words = []
 
@@ -307,16 +378,11 @@ class RelationParam(object):
         """Returns the :class:`Relation` that owns this param."""
         return self._relation_parent
 
-    @property
-    def relation(self):
-        """Returns the relation of this param to the predicate:
-        Possible values: SUBJECT, OBJECT, OTHER"""
-        return self._param_json.get("relation", None)
+    relation = proxy_response_json("relation", None, """
+    The relation of this param to the predicate.
+    Possible values: SUBJECT, OBJECT, OTHER""")
 
-    @property
-    def param_positions(self):
-        """Returns a list of the positions of the words in this param within their sentence."""
-        return self._param_json.get("wordPositions", [])
+    param_positions = proxy_response_json("wordPositions", [], "List of the positions of the words in this param within their sentence.")
 
     @property
     def param_words(self):
@@ -335,8 +401,7 @@ class RelationParam(object):
     def __repr__(self):
         return "TextRazor RelationParam:\"%s\" at positions %s" % (str(self.relation), str(self.param_words))
 
-    def __str__(self):
-        return repr(self)
+    __str__ = generate_str()
 
 class NounPhrase(object):
     """Represents a multi-word phrase extracted from a sentence.
@@ -344,7 +409,7 @@ class NounPhrase(object):
     Requires the "relations" extractor to be added to the TextRazor request."""
 
     def __init__(self, noun_phrase_json, link_index):
-        self._noun_phrase_json = noun_phrase_json
+        self.json = noun_phrase_json
         self._words = []
 
         for callback, arg in link_index.get(("nounPhrase", self.id), []):
@@ -360,15 +425,9 @@ class NounPhrase(object):
         self._words.append(word)
         word._add_noun_phrase(self)
 
-    @property
-    def id(self):
-        """The unique id of this annotation within its annotation set. """
-        return self._noun_phrase_json.get("id", None)
+    id = proxy_response_json("id", None, "The unique id of this NounPhrase within the result set.")
 
-    @property
-    def word_positions(self):
-        """Returns a list of the positions of the words in this phrase."""
-        return self._noun_phrase_json.get("wordPositions", [])
+    word_positions = proxy_response_json("wordPositions", None, "List of the positions of the words in this phrase.")
 
     @property
     def words(self):
@@ -378,14 +437,7 @@ class NounPhrase(object):
     def __repr__(self):
         return "TextRazor NounPhrase at positions %s" % (str(self.words))
 
-    def __str__(self):
-        out = ["TextRazor NounPhrase:", str(self.word_positions), "\n"]
-
-        for property in dir(self):
-            if not property.startswith("_") and not property == "word_positions":
-                out.extend([property, ":", repr(getattr(self, property)), "\n"])
-
-        return " ".join(out)
+    __str__ = generate_str(banned_properties=["word_positions",])
 
 class Property(object):
     """Represents a property relation extracted from raw text.  A property implies an "is-a" or "has-a" relationship
@@ -395,7 +447,7 @@ class Property(object):
     """
 
     def __init__(self, property_json, link_index):
-        self._property_json = property_json
+        self.json = property_json
         self._predicate_words = []
         self._property_words = []
 
@@ -422,43 +474,20 @@ class Property(object):
             self._property_words.append(word)
             word._add_property_properties(self)
 
-    @property
-    def id(self):
-        """The unique id of this annotation within its annotation set. """
-        return self._property_json.get("id", None)
+    id = proxy_response_json("id", None, "The unique id of this NounPhrase within the result set.")
 
-    @property
-    def predicate_positions(self):
-        """Returns a list of the positions of the words in the predicate (or focus) of this property."""
-        return self._property_json.get("wordPositions", [])
+    predicate_positions = proxy_response_json("wordPositions", [], "List of the positions of the words in the predicate (or focus) of this property.")
 
-    @property
-    def predicate_words(self):
-        """Returns a list of TextRazor words that make up the predicate (or focus) of this property."""
-        return self._predicate_words
+    predicate_words = proxy_member("_predicate_words", "List of TextRazor words that make up the predicate (or focus) of this property.")
 
-    @property
-    def property_positions(self):
-        """Returns a list of word positions that make up the modifier of the predicate of this property."""
-        return self._property_json.get("propertyPositions", [])
+    property_positions = proxy_response_json("propertyPositions", [], "List of the positions of the words that modify the predicate of this property.")
 
-    @property
-    def property_words(self):
-        """Returns a list of :class:`Word` that make up the property that targets the focus words."""
-        return self._property_words
+    property_words = proxy_member("_property_words", "List of :class:`Word` that modify the predicate of this property.")
 
     def __repr__(self):
         return "TextRazor Property at positions %s" % (str(self.predicate_positions))
 
-    def __str__(self):
-        out = ["TextRazor Property:", str(self.predicate_positions), "\n"]
-
-        for property in dir(self):
-            if not property.startswith("_") and not property == "predicate_positions":
-                out.extend([property, ":", repr(getattr(self, property)), "\n"])
-
-        return " ".join(out)
-
+    __str__ = generate_str(banned_properties=["predicate_positions",])
 
 class Relation(object):
     """Represents a grammatical relation between words.  Typically owns a number of
@@ -467,7 +496,7 @@ class Relation(object):
     Requires the "relations" extractor to be added to the TextRazor request."""
 
     def __init__(self, relation_json, link_index):
-        self._relation_json = relation_json
+        self.json = relation_json
 
         self._params = [RelationParam(param, self, link_index) for param in relation_json["params"]]
         self._predicate_words = []
@@ -481,50 +510,31 @@ class Relation(object):
             except KeyError as ex:
                 link_index[("word", position)] = [(self._register_link, None)]
 
-
     def _register_link(self, dummy, word):
         self._predicate_words.append(word)
         word._add_relation(self)
 
-    @property
-    def id(self):
-        """The unique id of this annotation within its annotation set. """
-        return self._relation_json.get("id", None)
+    id = proxy_response_json("id", None, "The unique id of this Relation within the result set.")
 
-    @property
-    def predicate_positions(self):
-        """Returns a list of the positions of the predicate words in this relation within their sentence."""
-        return self._relation_json.get("wordPositions", [])
+    predicate_positions = proxy_response_json("wordPositions", [], "List of the positions of the predicate words in this relation.")
 
-    @property
-    def predicate_words(self):
-        """Returns a list of the TextRazor words in this relation."""
-        return self._predicate_words
+    predicate_words = proxy_member("_predicate_words", "List of the positions of the predicate words in this relation.")
 
-    @property
-    def params(self):
-        """Returns a list of the TextRazor params of this relation."""
-        return self._params
+    params = proxy_member("_params", "List of the TextRazor RelationParam that are part of this relation.")
 
     def __repr__(self):
         return "TextRazor Relation at positions %s" % (str(self.predicate_words))
 
-    def __str__(self):
-        out = ["TextRazor Relation:", str(self.predicate_words), "\n"]
+    __str__ = generate_str(banned_properties=["predicate_positions",])
 
-        for property in dir(self):
-            if not property.startswith("_") and not property == "predicate_positions":
-                out.extend([property, ":", repr(getattr(self, property)), "\n"])
-
-        return " ".join(out)
 
 class Word(object):
     """Represents a single Word (token) extracted by TextRazor.
 
-Requires the "words" extractor to be added to the TextRazor request."""
+    Requires the "words" extractor to be added to the TextRazor request."""
 
     def __init__(self, response_word, link_index):
-        self._response_word = response_word
+        self.json = response_word
 
         self._parent = None
         self._children = []
@@ -568,127 +578,68 @@ Requires the "words" extractor to be added to the TextRazor request."""
     def _add_noun_phrase(self, noun_phrase):
         self._noun_phrases.append(noun_phrase)
 
-    @property
-    def parent_position(self):
-        """Returns the position of the grammatical parent of this word, or None if this word is either at the root
-        of the sentence or the "dependency-trees" extractor was not requested."""
-        return self._response_word.get("parentPosition", None)
+    parent_position = proxy_response_json("parentPosition", None, """
+    The position of the grammatical parent of this Word, or None if this Word is either at the root
+    of the sentence or the "dependency-trees" extractor was not requested.""")
 
-    @property
-    def parent(self):
-        """Returns a link to the TextRazor word that is parent of this word, or None if this word is either at the root
-        of the sentence or the "dependency-trees" extractor was not requested."""
-        return self._parent
+    parent = proxy_member("_parent", """
+    Link to the TextRazor Word that is parent of this Word, or None if this word is either at the root
+    of the sentence or the "dependency-trees" extractor was not requested.""")
 
-    @property
-    def relation_to_parent(self):
-        """Returns the Grammatical relation between this word and it's parent, or None if this word is either at the root
-        of the sentence or the "dependency-trees" extractor was not requested.
+    relation_to_parent = proxy_response_json("relationToParent", None, """
+    Returns the grammatical relation between this word and its parent, or None if this Word is either at the root
+    of the sentence or the "dependency-trees" extractor was not requested.
 
-        TextRazor parses into the Stanford uncollapsed dependencies, as detailed at:
+    TextRazor parses into the Stanford uncollapsed dependencies, as detailed at:
 
-        http://nlp.stanford.edu/software/dependencies_manual.pdf
-        """
-        return self._response_word.get("relationToParent", None)
+    http://nlp.stanford.edu/software/dependencies_manual.pdf""")
 
-    @property
-    def children(self):
-        """Returns a list of TextRazor words that make up the children of this word.  Returns an empty list
-        for leaf words, or if the "dependency-trees" extractor was not requested."""
-        return self._children
+    children = proxy_member("_children", """
+    List of TextRazor words that make up the children of this word.  Returns an empty list
+    for leaf words, or if the "dependency-trees" extractor was not requested.""")
 
-    @property
-    def position(self):
-        """Returns the position of this word in its sentence."""
-        return self._response_word.get("position", None)
+    position = proxy_response_json("position", None, "The position of this word in its sentence.")
 
-    @property
-    def stem(self):
-        """Returns the stem of this word"""
-        return self._response_word.get("stem", None)
+    stem = proxy_response_json("stem", None, "The stem of this word.")
 
-    @property
-    def lemma(self):
-        """Returns the morphological root of this word, see http://en.wikipedia.org/wiki/Lemma_(morphology)
-        for details."""
-        return self._response_word.get("lemma", None)
+    lemma = proxy_response_json("lemma", None, "The morphological root of this word, see http://en.wikipedia.org/wiki/Lemma_(morphology) for details.")
 
-    @property
-    def token(self):
-        """Returns the raw token string that matched this word in the source text."""
-        return self._response_word.get("token", None)
+    token = proxy_response_json("token", None, "The raw token string that matched this word in the source text.")
 
-    @property
-    def part_of_speech(self):
-        """Returns the Part of Speech that applies to this word.  We use the Penn treebank tagset,
-        as detailed here:
+    part_of_speech = proxy_response_json("partOfSpeech", None, """
+    The Part of Speech that applies to this word. We use the Penn treebank tagset,
+    as detailed here:
 
-        http://www.comp.leeds.ac.uk/ccalas/tagsets/upenn.html"""
-        return self._response_word.get("partOfSpeech", None)
+    http://www.comp.leeds.ac.uk/ccalas/tagsets/upenn.html""")
 
-    @property
-    def input_start_offset(self):
-        """Returns the start offset in the input text for this token.  Note that this offset applies to the
-        original Unicode string passed in to the api, TextRazor treats multi byte utf8 charaters as a single position."""
-        return self._response_word.get("startingPos", None)
+    input_start_offset = proxy_response_json("startingPos", None, """
+    The start offset in the input text for this token. Note that this offset applies to the
+    original Unicode string passed in to the api, TextRazor treats multi byte utf8 charaters as a single position.""")
 
-    @property
-    def input_end_offset(self):
-        """Returns the end offset in the input text for this token.  Note that this offset applies to the
-        original Unicode string passed in to the api, TextRazor treats multi byte utf8 charaters as a single position."""
-        return self._response_word.get("endingPos", None)
+    input_end_offset = proxy_response_json("endingPos", None, """
+    The end offset in the input text for this token. Note that this offset applies to the
+    original Unicode string passed in to the api, TextRazor treats multi byte utf8 charaters as a single position.""")
 
-    @property
-    def entailments(self):
-        """Returns a list of :class:`Entailment` that this word entails."""
-        return self._entailments
+    entailments = proxy_member("_entailments", "List of :class:`Entailment` that this word entails")
 
-    @property
-    def entities(self):
-        """Returns a list of :class:`Entity` that this word is a part of."""
-        return self._entities
+    entities = proxy_member("_entities", "List of :class:`Entity` that this word is a part of.")
 
-    @property
-    def relations(self):
-        """Returns a list of :class:`Relation` that this word is a predicate of."""
-        return self._relations
+    relations = proxy_member("_relations", "List of :class:`Relation` that this word is a predicate of.")
 
-    @property
-    def relation_params(self):
-        """Returns a list of :class:`RelationParam` that this word is a member of."""
-        return self._relation_params
+    relation_params = proxy_member("_relation_params", "List of :class:`RelationParam` that this word is a member of.")
 
-    @property
-    def property_properties(self):
-        """Returns a list of :class:`Property` that this word is a property member of."""
-        return self._property_properties
+    property_properties = proxy_member("_property_properties", "List of :class:`Property` that this word is a property member of.")
 
-    @property
-    def property_predicates(self):
-        """Returns a list of :class:`Property` that this word is a predicate (or focus) member of."""
-        return self._property_predicates
+    property_predicates = proxy_member("_property_predicates", "List of :class:`Property` that this word is a predicate (or focus) member of.")
 
-    @property
-    def noun_phrases(self):
-        """Returns a list of :class:`NounPhrase` that this word is a member of."""
-        return self._noun_phrases
+    noun_phrases = proxy_member("_noun_phrases", "List of :class:`NounPhrase` that this word is a member of.")
 
-    @property
-    def senses(self):
-        """Returns a list of (sense, score) tuples representing scores of each Wordnet sense this this word may be a part of."""
-        return self._response_word.get("senses", [])
+    senses = proxy_response_json("senses", [], "List of (sense, score) tuples representing scores of each Wordnet sense this this word may be a part of.")
 
     def __repr__(self):
         return "TextRazor Word:\"%s\" at position %s" % ((self.token).encode("utf-8"), str(self.position))
 
-    def __str__(self):
-        out = ["TextRazor Word:", str(self.token.encode("utf-8")), "\n"]
-
-        for property in dir(self):
-            if not property.startswith("_") and not property == "token":
-                out.extend([property, ":", repr(getattr(self, property)), "\n"])
-
-        return " ".join(out)
+    __str__ = generate_str()
 
 class Sentence(object):
     """Represents a single sentence extracted by TextRazor."""
@@ -723,20 +674,14 @@ class Sentence(object):
                 if word.part_of_speech not in ("$", "``", "''", "(", ")", ",", "--", ".", ":"):
                     self._root_word = word
 
-    @property
-    def root_word(self):
-        """Returns the root word of this sentence if "dependency-trees" extractor was requested."""
-        return self._root_word
+    root_word = proxy_member("_root_word", """The root word of this sentence if "dependency-trees" extractor was requested""")
 
-    @property
-    def words(self):
-        """Returns a list of all the :class:`Word` in this sentence."""
-        return self._words
+    words = proxy_member("_words", """List of all the :class:`Word` in this sentence""")
 
 class CustomAnnotation(object):
 
     def __init__(self, annotation_json, link_index):
-        self._annotation_json = annotation_json
+        self.json = annotation_json
 
         for key_value in annotation_json.get("contents", []):
             for link in key_value.get("links", []):
@@ -757,11 +702,11 @@ class CustomAnnotation(object):
         setattr(annotation, self.name(), new_custom_annotation_list)
 
     def name(self):
-        return self._annotation_json["name"]
+        return self.json["name"]
 
     def __getattr__(self, attr):
         exists = False
-        for key_value in self._annotation_json["contents"]:
+        for key_value in self.json["contents"]:
             if "key" in key_value and key_value["key"] == attr:
                 exists = True
                 for link in key_value.get("links", []):
@@ -782,12 +727,12 @@ class CustomAnnotation(object):
             raise AttributeError("%r annotation has no attribute %r" % (self.name(), attr))
 
     def __repr__(self):
-        return "TextRazor CustomAnnotation:\"%s\"" % (self._annotation_json["name"])
+        return "TextRazor CustomAnnotation:\"%s\"" % (self.json["name"])
 
     def __str__(self):
-        out = ["TextRazor CustomAnnotation:", str(self._annotation_json["name"]), "\n"]
+        out = ["TextRazor CustomAnnotation:", str(self.json["name"]), "\n"]
 
-        for key_value in self._annotation_json["contents"]:
+        for key_value in self.json["contents"]:
             try:
                 out.append("Param %s:" % key_value["key"])
             except Exception as ex:
@@ -803,69 +748,80 @@ class TextRazorResponse(object):
     """Represents a processed response from TextRazor."""
 
     def __init__(self, response_json):
-        self.response_json = response_json
-        self.sentences = []
-        self.custom_annotations = []
+        self.json = response_json
+
+        self._sentences = []
+        self._custom_annotations = []
+        self._topics = []
+        self._coarse_topics = []
+        self._entities = []
+        self._entailments = []
+        self._relations = []
+        self._properties = []
+        self._noun_phrases = []
 
         link_index = {}
 
-        if "response" in self.response_json:
+        if "response" in self.json:
             # There's a bit of magic here.  Each annotation registers a callback with the ids and types of annotation
             # that it is linked to.  When the linked annotation is later parsed it adds the link via the callback.
             # This means that annotations must be added in order of the dependency between them.
 
-            if "customAnnotations" in self.response_json["response"]:
-                self.custom_annotations = [CustomAnnotation(json, link_index) for json in self.response_json["response"]["customAnnotations"]]
+            if "customAnnotations" in self.json["response"]:
+                self._custom_annotations = [CustomAnnotation(json, link_index) for json in self.json["response"]["customAnnotations"]]
 
-            if "topics" in self.response_json["response"]:
-                self._topics = [Topic(topic_json, link_index) for topic_json in self.response_json["response"]["topics"]]
+            if "topics" in self.json["response"]:
+                self._topics = [Topic(topic_json, link_index) for topic_json in self.json["response"]["topics"]]
 
-            if "coarseTopics" in self.response_json["response"]:
-                self._coarse_topics = [Topic(topic_json, link_index) for topic_json in self.response_json["response"]["coarseTopics"]]
+            if "coarseTopics" in self.json["response"]:
+                self._coarse_topics = [Topic(topic_json, link_index) for topic_json in self.json["response"]["coarseTopics"]]
 
-            if "entities" in self.response_json["response"]:
-                self._entities = [Entity(entity_json, link_index) for entity_json in self.response_json["response"]["entities"]]
-            else:
-                self._entities = []
+            if "entities" in self.json["response"]:
+                self._entities = [Entity(entity_json, link_index) for entity_json in self.json["response"]["entities"]]
 
-            if "entailments" in self.response_json["response"]:
-                self._entailments = [Entailment(entailment_json, link_index) for entailment_json in self.response_json["response"]["entailments"]]
-            else:
-                self._entailments = []
+            if "entailments" in self.json["response"]:
+                self._entailments = [Entailment(entailment_json, link_index) for entailment_json in self.json["response"]["entailments"]]
 
-            if "relations" in self.response_json["response"]:
-                self._relations = [Relation(relation_json, link_index) for relation_json in self.response_json["response"]["relations"]]
-            else:
-                self._relations = []
+            if "relations" in self.json["response"]:
+                self._relations = [Relation(relation_json, link_index) for relation_json in self.json["response"]["relations"]]
 
-            if "properties" in self.response_json["response"]:
-                self._properties = [Property(property_json, link_index) for property_json in self.response_json["response"]["properties"]]
-            else:
-                self._properties = []
+            if "properties" in self.json["response"]:
+                self._properties = [Property(property_json, link_index) for property_json in self.json["response"]["properties"]]
 
-            if "nounPhrases" in self.response_json["response"]:
-                self._noun_phrases = [NounPhrase(phrase_json, link_index) for phrase_json in self.response_json["response"]["nounPhrases"]]
-            else:
-                self._noun_phrases = []
+            if "nounPhrases" in self.json["response"]:
+                self._noun_phrases = [NounPhrase(phrase_json, link_index) for phrase_json in self.json["response"]["nounPhrases"]]
 
-            if "sentences" in self.response_json["response"]:
-                self.sentences = [Sentence(sentence_json, link_index) for sentence_json in self.response_json["response"]["sentences"]]
+            if "sentences" in self.json["response"]:
+                self._sentences = [Sentence(sentence_json, link_index) for sentence_json in self.json["response"]["sentences"]]
 
     @property
     def raw_text(self):
-        return self.response_json["response"].get("rawText", "")
+        """"When the set_cleanup_return_raw option is enabled, contains the input text before any cleanup."""
+        return self.json["response"].get("rawText", "")
 
     @property
     def cleaned_text(self):
-        return self.response_json["response"].get("cleanedText", "")
+        """"When the set_cleanup_return_cleaned option is enabled, contains the input text after any cleanup/article extraction."""
+        return self.json["response"].get("cleanedText", "")
 
-    def summary(self):
-        return """Request processed in: %s seconds.  Num Sentences:%s""" % \
-                (self.response_json["time"], len(self.response_json["response"]["sentences"]))
-
+    @property
     def custom_annotation_output(self):
-        """Returns any output generated while running the embedded prolog engine on your rules."""
-        return self.response_json["response"].get("customAnnotationOutput", "")
+        """"Any output generated while running the embedded Prolog engine on your rules."""
+        return self.json["response"].get("customAnnotationOutput", "")
+
+    ok = proxy_response_json("ok", False, """
+    True if TextRazor successfully analyzed your document, False if there was some error.
+    More detailed information about the error is available in the :meth:`error` property.
+    """)
+
+    error = proxy_response_json("error", "", """
+    Descriptive error message of any problems that may have occurred during analysis,
+    or an empty string if there was no error.
+    """)
+
+    message = proxy_response_json("message", "", """
+    Any warning or informational messages returned from the server.
+    """)
 
     def coarse_topics(self):
         """Returns a list of all the coarse :class:`Topic` in the response. """
@@ -881,7 +837,7 @@ class TextRazorResponse(object):
 
     def words(self):
         """Returns a generator of all :class:`Word` across all sentences in the response."""
-        for sentence in self.sentences:
+        for sentence in self._sentences:
             for word in sentence.words:
                 yield word
 
@@ -903,31 +859,19 @@ class TextRazorResponse(object):
 
     def sentences(self):
         """Returns a list of all :class:`Sentence` in the response."""
-        return self.sentences
+        return self._sentences
 
     def matching_rules(self):
-        return [custom_annotation.name() for custom_annotation in self.custom_annotations]
+        """Returns a list of rule names that matched this document."""
+        return [custom_annotation.name() for custom_annotation in self._custom_annotations]
 
-    @property
-    def ok(self):
-        """Returns True if TextRazor successfully analyzed your document, False if there was some error.
-        More detailed information about the error is available in the :meth:`error` property."""
-        return self.response_json.get("ok", False)
-
-    @property
-    def error(self):
-        """Returns a descriptive error message of any problems that may have occurred during analysis,
-        or an empty string if there was no error."""
-        return self.response_json.get("error", "")
-
-    @property
-    def message(self):
-        """Returns any warning or informational messages returned from the server."""
-        return self.response_json.get("message", "")
+    def summary(self):
+        return """Request processed in: %s seconds.  Num Sentences:%s""" % \
+                (self.json["time"], len(self.json["response"]["sentences"]))
 
     def __getattr__(self, attr):
         exists = False
-        for custom_annotation in self.custom_annotations:
+        for custom_annotation in self._custom_annotations:
             if custom_annotation.name() == attr:
                 exists = True
                 yield custom_annotation
@@ -935,7 +879,252 @@ class TextRazorResponse(object):
         if not exists:
             raise AttributeError("TextRazor response has no annotation %r" % attr)
 
-class TextRazor(object):
+class AllDictionaryEntriesResponse(object):
+
+    def __init__(self, json):
+        self.json = json
+
+        self.entries = [DictionaryEntry(dictionary_json) for dictionary_json in json.get("entries", [])]
+
+    total = proxy_response_json("total", 0, """
+    The total number of DictionaryEntry in this Dictionary.
+    """)
+
+    limit = proxy_response_json("limit", 0, """
+    The maximium number of DictionaryEntry to be returned.
+    """)
+
+    offset = proxy_response_json("offset", 0, """
+    Offset into the full list of DictionaryEntry that this result set started from.
+    """)
+
+class DictionaryManager(TextRazorConnection):
+
+    path = "entities/"
+
+    def __init__(self, api_key=None):
+        super(DictionaryManager, self).__init__(api_key)
+
+    def create_dictionary(self, dictionary_properties):
+        """ Creates a new dictionary using properties provided in the dict dictionary_properties.
+        See the properties of class Dictionary for valid options.
+
+        >>> import textrazor
+        >>> dictionary_manager = textrazor.DictionaryManager("YOUR_API_KEY_HERE")
+        >>>
+        >>> dictionary_manager.create_dictionary({"id":"UNIQUE_ID"})
+        """
+
+        new_dictionary = Dictionary({})
+
+        for key, value in dictionary_properties.iteritems():
+            if not hasattr(new_dictionary, key):
+                valid_options = ",".join(name for name, obj in Dictionary.__dict__.iteritems() if isinstance(obj, proxy_response_json))
+
+                raise TextRazorAnalysisException("Cannot create dictionary, unexpected param: %s. Supported params: %s"  % (key, valid_options))
+
+            setattr(new_dictionary, key, value)
+
+        # Check for the existence of a dictionary ID, without that
+        # we can't generate a URL and the server will return an unhelpful message.
+        if not new_dictionary.id:
+            raise TextRazorAnalysisException("Cannot create dictionary, dictionary id not provided.")
+
+        dictionary_path = "".join([self.path, new_dictionary.id])
+
+        self.do_request(dictionary_path, json.dumps(new_dictionary.json), method="PUT")
+
+        # The server may have added some optional fields so we want to force the user to "get" the new dictionary.
+        return self.get_dictionary(new_dictionary.id)
+
+    def all_dictionaries(self):
+        """ Returns a list of all Dictionary in your account.
+
+        >>> for dictionary in dictionary_manager.all_dictionaries():
+        >>>     print dictionary.id
+        """
+
+        response = self.do_request(self.path)
+
+        if "ok" in response and not response["ok"]:
+            raise TextRazorAnalysisException("TextRazor was unable to retrieve all dictionaries. Error: %s" % str(response))
+
+        if "dictionaries" in response:
+            return [Dictionary(dictionary_json) for dictionary_json in response["dictionaries"]]
+
+        return []
+
+    def get_dictionary(self, id):
+        """ Returns a Dictionary object by id.
+
+        >>> print dictionary_manager.get_id("UNIQUE_ID").language
+        """
+        dictionary_path = "".join([self.path, id])
+        response = self.do_request(dictionary_path, method="GET")
+
+        if "ok" in response and not response["ok"]:
+            raise TextRazorAnalysisException("TextRazor was unable to retrieve dictionary with id: %s. Error: %s" % (id, str(response)))
+
+        return Dictionary(response["response"])
+
+    def delete_dictionary(self, id):
+        """ Deletes a dictionary and all its entries by id.
+
+        >>> dictionary_manager.delete_dictionary("UNIQUE_ID")
+        """
+        dictionary_path = "".join([self.path, id])
+        response = self.do_request(dictionary_path, method="DELETE")
+
+        if "ok" in response and not response["ok"]:
+            raise TextRazorAnalysisException("Unable to delete dictionary with ID:%s. Error: %s" % (id, str(response)))
+
+    def all_entries(self, dictionary_id, limit=None, offset=None):
+        """ Returns a AllDictionaryEntriesResponse containing all DictionaryEntry for dictionary with id dictionary_id, along with paging information.
+
+        Larger dictionaries can be too large to download all at once. Where possible it is recommended that you use
+        limit and offset paramaters to control the TextRazor response, rather than filtering client side.
+
+        >>> entry_response = dictionary_manager.all_entries("UNIQUE_ID", limit=10, offset=10)
+        >>> for entry in entry_response.entries:
+        >>>     print entry.text
+        """
+
+        params = {}
+        if limit: params['limit'] = limit
+        if offset: params['offset'] = offset
+
+        all_path = "".join([self.path, dictionary_id, "/_all?", urlencode(params)])
+
+        response = self.do_request(all_path, method="GET")
+
+        if "ok" in response and not response["ok"]:
+            raise TextRazorAnalysisException("TextRazor was unable to retrieve dictionary entries with dictionary id: %s, Error: %s" % (dictionary_id, str(response)))
+
+        return AllDictionaryEntriesResponse(response["response"])
+
+    def add_entries(self, dictionary_id, entities):
+        """ Adds entries to a dictionary with id dictionary_id.
+
+        Entries must be a List of dicts corresponding to properties of the new DictionaryEntry objects.
+        At a minimum this would be [{'text':'test text to match'}].
+
+        >>> dictionary_manager.add_entries("UNIQUE_ID", [{'text':'test text to match'}, {'text':'more text to match', 'id':'UNIQUE_ENTRY_ID'}])
+        """
+        dictionary_path = "".join([self.path, dictionary_id, "/"])
+        all_entries = []
+
+        for entity in entities:
+            new_entry = DictionaryEntry({})
+
+            for key, value in entity.iteritems():
+                if not hasattr(new_entry, key):
+                    valid_options = ",".join(name for name, obj in DictionaryEntry.__dict__.iteritems() if isinstance(obj, proxy_response_json))
+
+                    raise TextRazorAnalysisException("Cannot create dictionary entry, unexpected param: %s. Supported params: %s"  % (key, valid_options))
+
+                setattr(new_entry, key, value)
+
+            all_entries.append(new_entry.json)
+
+        # For performance reasons TextRazor expects a maximum of 20000 dictionary entries at a time,
+        # we transparently batch them up here.
+
+        for batch in _chunks(all_entries, 20000):
+            response = self.do_request(dictionary_path, json.dumps(batch), method="POST")
+
+            if "ok" in response and not response["ok"]:
+                raise TextRazorAnalysisException("Unable to add entries to dictionary with ID:%s. Error: %s" % (dictionary_id, str(response)))
+
+    def delete_entry(self, dictionary_id, entry_id):
+        """Deletes a specific DictionaryEntry by dictionary id and entry id.
+
+        For performance reasons it's always faster to perform major changes
+        to dictionaries by deleting and recreating the whole dictionary rather than removing
+        many individual entries.
+
+        >>> dictionary_manager.delete_entry('UNIQUE_ID', 'UNIQUE_ENTRY_ID')
+        """
+
+        dictionary_path = "".join([self.path, dictionary_id, "/", entry_id])
+
+        response = self.do_request(dictionary_path, method="DELETE")
+
+        if "ok" in response and not response["ok"]:
+            raise TextRazorAnalysisException("TextRazor was unable to delete dictionary entry with dictionary id: %s, entry id: %s Error: %s" % (dictionary_id, entry_id, str(response)))
+
+    def get_entry(self, dictionary_id, entry_id):
+        """ Retrieves a specific DictionaryEntry by dictionary id and entry id.
+
+        >>> print dictionary_manager.get_id('UNIQUE_ID', 'UNIQUE_ENTRY_ID').text
+        """
+
+        dictionary_path = "".join([self.path, dictionary_id, "/", entry_id])
+
+        response = self.do_request(dictionary_path, method="GET")
+
+        if "ok" in response and not response["ok"]:
+            raise TextRazorAnalysisException("TextRazor was unable to retrieve dictionary entry with dictionary id: %s, entry id: %s Error: %s" % (dictionary_id, entry_id, str(response)))
+
+        return DictionaryEntry(response["response"])
+
+class DictionaryEntry(object):
+
+    def __init__(self, json):
+        self.json = json
+
+    id = proxy_response_json("id", "", """
+    Unique ID for this entry, used to identify and manipulate specific entries.
+
+    Defaults to an automatically generated unique id.
+    """)
+
+    text = proxy_response_json("text", "", """
+    Unicode string representing the text to match to this DictionaryEntry.
+    """)
+
+    data = proxy_response_json("data", {}, """
+    A dictionary mapping string keys to lists of string data values.
+    TextRazor will return this dictionary to you as part of the Entity 'data' property whenever it matches this entry.
+    This is useful for adding application-specific metadata to each entry.
+
+    >>> {'type':['people', 'person', 'politician']}
+    """)
+
+
+class Dictionary(object):
+
+    def __init__(self, json):
+        self.json = json
+
+    match_type = proxy_response_json("matchType", "", """
+    Controls any pre-processing done on your dictionary before matching.
+
+    Valid options are:
+    stem    - Words are split and "stemmed" before matching, resulting in a more relaxed match.
+              This is an easy way to match plurals - love, loved, loves will all match the same dictionary entry.
+              This implicitly sets "case_insensitive" to True.
+
+    token   - Words are split and matched literally.
+
+    Defaults to 'token'.""")
+
+    case_insensitive = proxy_response_json("caseInsensitive", False, """
+    When True, this dictionary will match both uppercase and lowercase characters.
+    """)
+
+    id = proxy_response_json("id", "", """
+    The unique identifier for this dictionary.
+    """)
+
+    language = proxy_response_json("language", "", """
+    When set to a ISO-639-2 language code, this dictionary will only match documents of the corresponding language.
+
+    When set to 'any', this dictionary will match any document.
+
+    Defaults to 'any'.
+    """)
+
+class TextRazor(TextRazorConnection):
     """
     The main TextRazor client.  To process your text, create a :class:`TextRazor` instance with your API key
     and set the extractors you need to process the text.  Calls to :meth:`analyze` and :meth:`analyze_url` will then process raw text or URLs
@@ -946,8 +1135,10 @@ class TextRazor(object):
 
     Below is an entity extraction example from the tutorial, you can find more examples at http://www.textrazor.com/tutorials.
 
-    >>> client = TextRazor(api_key="DEMO", extractors=["entities"])
-    >>> client.set_do_cleanup_HTML(True)
+    >>> import textrazor
+    >>>
+    >>> client = textrazor.TextRazor("API_KEY_GOES_HERE", extractors=["entities"])
+    >>> client.set_cleanup_mode("cleanHTML")
     >>>
     >>> response = client.analyze_url("http://www.bbc.co.uk/news/uk-politics-18640916")
     >>>
@@ -961,14 +1152,10 @@ class TextRazor(object):
     >>>         seen.add(entity.id)
     """
 
-    _SECURE_TEXTRAZOR_ENDPOINT = "https://api.textrazor.com/"
-    _TEXTRAZOR_ENDPOINT = "http://api.textrazor.com/"
+    def __init__(self, api_key=None, extractors=[], do_compression=None, do_encryption=None):
+        super(TextRazor, self).__init__(api_key, do_compression, do_encryption)
 
-    def __init__(self, api_key, extractors, do_compression=True, do_encryption=False):
-        self.api_key = api_key
         self.extractors = extractors
-        self.do_compression = do_compression
-        self.do_encryption = do_encryption
         self.cleanup_html = False
         self.cleanup_mode = None
         self.cleanup_return_cleaned = None
@@ -981,10 +1168,7 @@ class TextRazor(object):
         self.dbpedia_type_filters = []
         self.freebase_type_filters = []
         self.allow_overlap = None
-
-    def set_api_key(self, api_key):
-        """Sets the TextRazor API key, required for all requests."""
-        self.api_key = api_key
+        self.entity_dictionaries = []
 
     def set_extractors(self, extractors):
         """Sets a list of "Extractors" which extract various information from your text.
@@ -998,16 +1182,6 @@ class TextRazor(object):
         """Sets a string containing Prolog logic.  All rules matching an extractor name listed in the request will be evaluated
         and all matching param combinations linked in the response. """
         self.rules = rules
-
-    def set_do_compression(self, do_compression):
-        """When True, request gzipped responses from TextRazor.  When expecting a large response this can
-        significantly reduce bandwidth.  Defaults to True."""
-        self.do_compression = do_compression
-
-    def set_do_encryption(self, do_encryption):
-        """When True, all communication to TextRazor will be sent over SSL, when handling sensitive
-        or private information this should be set to True.  Defaults to False."""
-        self.do_encryption = do_encryption
 
     def set_enrichment_queries(self, enrichment_queries):
         """Set a list of "Enrichment Queries", used to enrich the entity response with structured linked data.
@@ -1074,6 +1248,11 @@ class TextRazor(object):
         """
         self.download_user_agent = user_agent
 
+    def set_entity_dictionaries(self, entity_dictionaries):
+        """Sets a list of the custom entity dictionaries to match against your content. Each item should be a string ID
+        corresponding to dictionaries you have previously configured through the textrazor.Dictionary interface."""
+        self.entity_dictionaries = entity_dictionaries
+
     def set_entity_allow_overlap(self, allow_overlap):
         """When allow_overlap is True, entities in the response may overlap. When False, the "best" entity
         is found such that none overlap. Defaults to True. """
@@ -1094,10 +1273,12 @@ class TextRazor(object):
             post_data.append((param, value))
 
     def _build_post_data(self):
-        post_data = [("apiKey", self.api_key),
-                     ("rules", self.rules),
+        post_data = [("rules", self.rules),
                      ("extractors", ",".join(self.extractors)),
                      ("cleanupHTML", self.cleanup_html)]
+
+        for dictionary in self.entity_dictionaries:
+            post_data.append(("entities.dictionaries", dictionary))
 
         for filter in self.dbpedia_type_filters:
             post_data.append(("entities.filterDbpediaTypes", filter))
@@ -1118,37 +1299,6 @@ class TextRazor(object):
 
         return post_data
 
-    def _do_request(self, post_data, request_headers):
-        encoded_post_data = urlencode(post_data).encode("utf-8")
-
-        if self.do_encryption:
-            request = Request(self._SECURE_TEXTRAZOR_ENDPOINT, headers=request_headers, data=encoded_post_data)
-        else:
-            request = Request(self._TEXTRAZOR_ENDPOINT, headers=request_headers, data=encoded_post_data)
-
-        try:
-            response = urlopen(request)
-        except HTTPError as e:
-            raise TextRazorAnalysisException("TextRazor returned HTTP Code %d: %s" % (e.code, e.read()))
-        except URLError as e:
-            raise TextRazorAnalysisException("Could not connect to TextRazor")
-
-        if response.info().get('Content-Encoding') == 'gzip':
-            buf = IOStream( response.read())
-            response = gzip.GzipFile(fileobj=buf)
-
-        response_json = json.loads(response.read().decode("utf-8"))
-
-        return TextRazorResponse(response_json)
-
-    def _build_request_headers(self):
-        request_headers = {}
-
-        if self.do_compression:
-            request_headers['Accept-encoding'] = 'gzip'
-
-        return request_headers
-
     def analyze_url(self, url):
         """Calls the TextRazor API with the provided url.
 
@@ -1167,8 +1317,7 @@ class TextRazor(object):
         post_data = self._build_post_data()
         post_data.append(("url", url.encode("utf-8")))
 
-        return self._do_request(post_data, self._build_request_headers())
-
+        return TextRazorResponse(self.do_request("", urlencode(post_data), method="POST"))
 
     def analyze(self, text):
         """Calls the TextRazor API with the provided unicode text.
@@ -1179,4 +1328,4 @@ class TextRazor(object):
         post_data = self._build_post_data()
         post_data.append(("text", text.encode("utf-8")))
 
-        return self._do_request(post_data, self._build_request_headers())
+        return TextRazorResponse(self.do_request("", urlencode(post_data), method="POST"))
