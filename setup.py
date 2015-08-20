@@ -4,9 +4,9 @@ from setuptools import setup, find_packages
 
 setup(
     name='textrazor',
-    version='1.1.0',
+    version='1.2.0',
     description='Official Python SDK for TextRazor (https://textrazor.com).',
-    long_description=open('README.rst').read(),,
+    long_description=open('README.rst').read(),
     author='TextRazor Ltd.',
     author_email='toby@textrazor.com',
     url='https://textrazor.com/',
