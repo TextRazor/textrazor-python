@@ -105,7 +105,7 @@ class generate_str(object):
         try:
             encoded_id = self.id.encode("utf-8")
             out.extend([" with id:", encoded_id, "\n"])
-        except Exception, ex:
+        except Exception as ex:
             out.extend([":\n",])
 
         for property in dir(instance):
@@ -185,7 +185,7 @@ class TextRazorConnection(object):
         if do_request_compression:
             encoded_post_data = zlib.compress(encoded_post_data)
 
-        request = Request(url.encode("utf-8"), headers=request_headers, data=encoded_post_data)
+        request = Request(url, headers=request_headers, data=encoded_post_data)
         request.get_method = lambda: method
 
         try:
@@ -917,9 +917,9 @@ class DictionaryManager(TextRazorConnection):
 
         new_dictionary = Dictionary({})
 
-        for key, value in dictionary_properties.iteritems():
+        for key, value in dictionary_properties.items():
             if not hasattr(new_dictionary, key):
-                valid_options = ",".join(name for name, obj in Dictionary.__dict__.iteritems() if isinstance(obj, proxy_response_json))
+                valid_options = ",".join(name for name, obj in Dictionary.__dict__.items() if isinstance(obj, proxy_response_json))
 
                 raise TextRazorAnalysisException("Cannot create dictionary, unexpected param: %s. Supported params: %s"  % (key, valid_options))
 
@@ -1016,9 +1016,9 @@ class DictionaryManager(TextRazorConnection):
         for entity in entities:
             new_entry = DictionaryEntry({})
 
-            for key, value in entity.iteritems():
+            for key, value in entity.items():
                 if not hasattr(new_entry, key):
-                    valid_options = ",".join(name for name, obj in DictionaryEntry.__dict__.iteritems() if isinstance(obj, proxy_response_json))
+                    valid_options = ",".join(name for name, obj in DictionaryEntry.__dict__.items() if isinstance(obj, proxy_response_json))
 
                     raise TextRazorAnalysisException("Cannot create dictionary entry, unexpected param: %s. Supported params: %s"  % (key, valid_options))
 
