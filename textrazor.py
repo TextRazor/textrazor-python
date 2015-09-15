@@ -223,7 +223,7 @@ class Topic(object):
 
     wikipedia_link = proxy_response_json("wikiLink", None, """A link to Wikipedia for this topic, or None if this Topic couldn't be linked to a Wikipedia page.""")
 
-    score = proxy_response_json("label", None, """The contextual relevance of this Topic to your document.""")
+    score = proxy_response_json("score", None, """The contextual relevance of this Topic to your document.""")
 
     __str__ = generate_str()
 
