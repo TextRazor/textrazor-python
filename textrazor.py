@@ -103,7 +103,7 @@ class generate_str(object):
         out = ["TextRazor ", type(instance).__name__]
 
         try:
-            encoded_id = self.id.encode("utf-8")
+            encoded_id = instance.id.encode("utf-8")
             out.extend([" with id:", encoded_id, "\n"])
         except Exception as ex:
             out.extend([":\n",])
@@ -143,6 +143,12 @@ class TextRazorConnection(object):
         """When True, all communication to TextRazor will be sent over SSL, when handling sensitive
         or private information this should be set to True.  Defaults to False."""
         self.do_encryption = do_encryption
+
+    def set_endpoint(self, endpoint):
+        self.endpoint = endpoint
+
+    def set_secure_endpoint(self, endpoint):
+        self.secure_endpoint = endpoint
 
     def _build_request_headers(self, do_request_compression=False):
         request_headers = {
@@ -186,6 +192,7 @@ class TextRazorConnection(object):
             encoded_post_data = zlib.compress(encoded_post_data)
 
         request = Request(url, headers=request_headers, data=encoded_post_data)
+
         request.get_method = lambda: method
 
         try:
@@ -222,6 +229,8 @@ class Topic(object):
     label = proxy_response_json("label", None, """The label of this Topic.""")
 
     wikipedia_link = proxy_response_json("wikiLink", None, """A link to Wikipedia for this topic, or None if this Topic couldn't be linked to a Wikipedia page.""")
+
+    wikidata_id = proxy_response_json("wikidataId", None, """A link to the Wikidata ID for this topic, or None if this Topic couldn't be linked to a Wikipedia page.""")
 
     score = proxy_response_json("score", None, """The contextual relevance of this Topic to your document.""")
 
@@ -759,6 +768,7 @@ class TextRazorResponse(object):
         self._relations = []
         self._properties = []
         self._noun_phrases = []
+        self._categories = []
 
         link_index = {}
 
@@ -793,6 +803,10 @@ class TextRazorResponse(object):
 
             if "sentences" in self.json["response"]:
                 self._sentences = [Sentence(sentence_json, link_index) for sentence_json in self.json["response"]["sentences"]]
+
+            if "categories" in self.json["response"]:
+                self._categories = [ScoredCategory(category_json) for category_json in self.json["response"]["categories"]]
+
 
     @property
     def raw_text(self):
@@ -860,6 +874,10 @@ class TextRazorResponse(object):
     def sentences(self):
         """Returns a list of all :class:`Sentence` in the response."""
         return self._sentences
+
+    def categories(self):
+        """List of all :class:`ScoredCategory` in the response."""
+        return self._categories
 
     def matching_rules(self):
         """Returns a list of rule names that matched this document."""
@@ -1124,6 +1142,141 @@ class Dictionary(object):
     Defaults to 'any'.
     """)
 
+class AllCategoriesResponse(object):
+
+    def __init__(self, json):
+        self.json = json
+        self.categories = [Category(category_json) for category_json in json.get("categories", [])]
+
+    total = proxy_response_json("total", 0, """
+    The total number of Category in this Classifier.
+    """)
+
+    limit = proxy_response_json("limit", 0, """
+    The maximium number of Category to be returned.
+    """)
+
+    offset = proxy_response_json("offset", 0, """
+    Offset into the full list of Category that this result set started from.
+    """)
+
+class ScoredCategory(object):
+
+    def __init__(self, json):
+        self.json = json
+
+    classifier_id = proxy_response_json("classifierId", "", """
+    The unique identifier for the classifier that matched this ScoredCategory.
+    """)
+
+    category_id = proxy_response_json("categoryId", "", """
+    The unique identifier of this category.
+    """)
+
+    label = proxy_response_json("label", "", """
+    The human readable label for this category.
+    """)
+
+    score = proxy_response_json("score", 0, """
+    The score TextRazor has assigned to this category, between 0 and 1.
+    """)
+
+class Category(object):
+    path = "categories/"
+
+    def __init__(self, json):
+        self.json = json
+
+    query = proxy_response_json("query", "", """The query used to define this category.""")
+
+    category_id = proxy_response_json("categoryId", "", """The unique ID for this category within its classifier.""")
+
+    label = proxy_response_json("label", "", """The human readable label for this category. This is an optional field.""")
+
+
+class ClassifierManager(TextRazorConnection):
+
+    path = "categories/"
+
+    def __init__(self, api_key=None):
+        super(ClassifierManager, self).__init__(api_key)
+
+    def delete_classifier(self, classifier_id):
+        """ Deletes a Classifier and all its Categories by id. """
+        classifier_path = "".join([self.path, classifier_id])
+        self.do_request(classifier_path, method="DELETE")
+
+    def create_classifier(self, classifier_id, categories):
+        """ Creates a new classifier using the provided list of Category.
+
+        See the properties of class Category for valid options. """
+
+        classifier_path = "".join([self.path, classifier_id])
+
+        all_categories = []
+
+        for category in categories:
+            new_category = Category({})
+
+            for key, value in category.items():
+                if not hasattr(new_category, key):
+                    valid_options = ",".join(name for name, obj in Category.__dict__.items() if isinstance(obj, proxy_response_json))
+
+                    raise TextRazorAnalysisException("Cannot create category, unexpected param: %s. Supported params: %s"  % (key, valid_options))
+
+                setattr(new_category, key, value)
+
+            all_categories.append(new_category.json)
+
+        self.do_request(classifier_path, json.dumps(all_categories), content_type="application/json", method="PUT")
+
+    def create_classifier_with_csv(self, classifier_id, categories_csv):
+        """ Uploads the string contents of a CSV file containing new categories to be added to the classifier called classifier_name.
+           Any existing classifier with this ID will be replaced. """
+
+        classifier_path = "".join([self.path, classifier_id])
+        self.do_request(classifier_path, categories_csv, content_type="application/csv", method="PUT")
+
+    def all_categories(self, classifier_id, limit=None, offset=None):
+        """ Returns a AllCategoriesResponse containing all Categories for classifier with id classifier_id, along with paging information.
+
+        Larger classifiers can be too large to download all at once. Where possible it is recommended that you use
+        limit and offset paramaters to control the TextRazor response, rather than filtering client side.
+
+        >>> category_response = classifier_manager.all_entries("UNIQUE_CLASSIFIER_ID", limit=10, offset=10)
+        >>> for category in category_response.categories:
+        >>>     print category.text
+        """
+
+        params = {}
+        if limit: params['limit'] = limit
+        if offset: params['offset'] = offset
+
+        all_path = "".join([self.path, classifier_id, "/_all?", urlencode(params)])
+
+        response = self.do_request(all_path, method="GET")
+
+        if "ok" in response and not response["ok"]:
+            raise TextRazorAnalysisException("TextRazor was unable to retrieve categories for classifier id: %s, Error: %s" % (classifier_id, str(response)))
+
+        return AllCategoriesResponse(response["response"])
+
+    def delete_category(self, classifier_id, category_id):
+        """ Deletes a Category by ID. """
+        category_path = "".join([self.path, classifier_id, "/", category_id])
+        self.do_request(category_path, method="DELETE")
+
+    def get_category(self, classifier_id, category_id):
+        """ Returns a Category by ID. """
+        category_path = "".join([self.path, classifier_id, "/", category_id])
+
+        response = self.do_request(category_path, method="GET")
+
+        if "ok" in response and not response["ok"]:
+            raise TextRazorAnalysisException("TextRazor was unable to retrieve category for classifier id: %s, Error: %s" % (classifier_id, str(response)))
+
+        return Category(response["response"])
+
 class TextRazor(TextRazorConnection):
     """
     The main TextRazor client.  To process your text, create a :class:`TextRazor` instance with your API key
@@ -1169,6 +1322,8 @@ class TextRazor(TextRazorConnection):
         self.freebase_type_filters = []
         self.allow_overlap = None
         self.entity_dictionaries = []
+        self.classifiers = []
+        self.classifier_max_categories = None
 
     def set_extractors(self, extractors):
         """Sets a list of "Extractors" which extract various information from your text.
@@ -1268,6 +1423,19 @@ class TextRazor(TextRazorConnection):
         match at least one of these types."""
         self.freebase_type_filters = filters
 
+    def set_classifiers(self, classifiers):
+        """Sets a list of classifiers to evaluate against your document. Each entry should be a string ID corresponding to either one of TextRazor's default classifiers, or one you have previously configured through the ClassifierManager interface.
+
+        Valid Options are:
+        textrazor_iab Score against the Internet Advertising Bureau QAG segments - approximately 400 high level categories arranged into two tiers.
+        textrazor_newscodes Score against the IPTC newscodes - approximately 1400 high level categories organized into a three level tree.
+        custom classifier name Score against a custom classifier, previously created through the Classifier Manager interface."""
+        self.classifiers = classifiers
+
+    def set_classifier_max_categories(self, max_categories):
+        """Sets the maximum number of matching categories to retrieve from the TextRazor."""
+        self.classifier_max_categories = max_categories
+
     def _add_optional_param(self, post_data, param, value):
         if value != None:
             post_data.append((param, value))
@@ -1275,7 +1443,8 @@ class TextRazor(TextRazorConnection):
     def _build_post_data(self):
         post_data = [("rules", self.rules),
                      ("extractors", ",".join(self.extractors)),
-                     ("cleanupHTML", self.cleanup_html)]
+                     ("cleanupHTML", self.cleanup_html),
+                     ("classifiers", ",".join(self.classifiers))]
 
         for dictionary in self.entity_dictionaries:
             post_data.append(("entities.dictionaries", dictionary))
@@ -1296,6 +1465,7 @@ class TextRazor(TextRazorConnection):
         self._add_optional_param(post_data, "cleanup.returnRaw", self.cleanup_return_raw)
         self._add_optional_param(post_data, "cleanup.useMetadata", self.cleanup_use_metadata)
         self._add_optional_param(post_data, "download.userAgent", self.download_user_agent)
+        self._add_optional_param(post_data, "classifier.maxCategories", self.classifier_max_categories)
 
         return post_data
 
