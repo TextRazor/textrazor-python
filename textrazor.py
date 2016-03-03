@@ -30,7 +30,6 @@ except ImportError:
     from urllib.error import HTTPError, URLError
 
 import warnings
-import re
 
 try:
     import simplejson as json
@@ -61,9 +60,11 @@ do_encryption = True
 _SECURE_TEXTRAZOR_ENDPOINT = "https://api.textrazor.com/"
 _TEXTRAZOR_ENDPOINT = "http://api.textrazor.com/"
 
+
 def _chunks(l, n):
     n = max(1, n)
     return (l[i:i + n] for i in range(0, len(l), n))
+
 
 class proxy_response_json(object):
     """ Helper class to provide a transparent proxy for python properties
@@ -75,13 +76,15 @@ class proxy_response_json(object):
         self.attr_name = attr_name
         self.default = default
 
-        if doc: self.__doc__ = doc
+        if doc:
+            self.__doc__ = doc
 
     def __get__(self, instance, owner=None):
         return instance.json.get(self.attr_name, self.default)
 
     def __set__(self, instance, value):
         instance.json[self.attr_name] = value
+
 
 class proxy_member(object):
     """ Slightly redundant given the property decorator, but saves some space
@@ -90,13 +93,15 @@ class proxy_member(object):
     def __init__(self, attr_name, doc=None):
         self.attr_name = attr_name
 
-        if doc: self.__doc__ = doc
+        if doc:
+            self.__doc__ = doc
 
     def __get__(self, instance, owner=None):
         return getattr(instance, self.attr_name)
 
+
 class generate_str(object):
-    def __init__(self, banned_properties = []):
+    def __init__(self, banned_properties=[]):
         self.banned_properties = banned_properties
 
     def __get__(self, instance, owner=None):
@@ -105,14 +110,15 @@ class generate_str(object):
         try:
             encoded_id = instance.id.encode("utf-8")
             out.extend([" with id:", encoded_id, "\n"])
-        except Exception as ex:
-            out.extend([":\n",])
+        except Exception:
+            out.extend([":\n", ])
 
         for property in dir(instance):
-            if not property.startswith("_") and not property == "id" and not property in self.banned_properties:
+            if not property.startswith("_") and property != "id" and property not in self.banned_properties:
                 out.extend([property, ":", repr(getattr(instance, property)), "\n"])
 
         return " ".join(out)
+
 
 class TextRazorConnection(object):
 
@@ -126,9 +132,12 @@ class TextRazorConnection(object):
         self.endpoint = _TEXTRAZOR_ENDPOINT
         self.secure_endpoint = _SECURE_TEXTRAZOR_ENDPOINT
 
-        if None == self.api_key: self.api_key = api_key
-        if None == self.do_compression: self.do_compression = do_compression
-        if None == self.do_encryption: self.do_encryption = do_encryption
+        if self.api_key is None:
+            self.api_key = api_key
+        if self.do_compression is None:
+            self.do_compression = do_compression
+        if self.do_encryption is None:
+            self.do_encryption = do_encryption
 
     def set_api_key(self, api_key):
         """Sets the TextRazor API key, required for all requests."""
@@ -152,7 +161,7 @@ class TextRazorConnection(object):
 
     def _build_request_headers(self, do_request_compression=False):
         request_headers = {
-            'X-TextRazor-Key' : self.api_key
+            'X-TextRazor-Key': self.api_key
         }
 
         if self.do_compression:
@@ -199,7 +208,7 @@ class TextRazorConnection(object):
             response = urlopen(request)
         except HTTPError as e:
             raise TextRazorAnalysisException("TextRazor returned HTTP Code %d: %s" % (e.code, e.read()))
-        except URLError as e:
+        except URLError:
             raise TextRazorAnalysisException("Could not connect to TextRazor")
 
         if response.info().get('Content-Encoding') == 'gzip':
@@ -209,8 +218,10 @@ class TextRazorConnection(object):
         response_text = response.read().decode("utf-8")
         return json.loads(response_text)
 
+
 class TextRazorAnalysisException(BaseException):
     pass
+
 
 class Topic(object):
     """Represents a single abstract topic extracted from the input text.
@@ -236,7 +247,9 @@ class Topic(object):
 
     __str__ = generate_str()
 
-    def __repr__(self): return "TextRazor Topic %s with label %s" % (str(self.id), str(self.label))
+    def __repr__(self):
+        return "TextRazor Topic %s with label %s" % (str(self.id), str(self.label))
+
 
 class Entity(object):
     """Represents a single "Named Entity" extracted from the input text.
@@ -254,7 +267,7 @@ class Entity(object):
         for position in self.matched_positions:
             try:
                 link_index[("word", position)].append((self._register_link, None))
-            except KeyError as ex:
+            except KeyError:
                 link_index[("word", position)] = [(self._register_link, None)]
 
     def _register_link(self, dummy, word):
@@ -328,7 +341,7 @@ class Entailment(object):
         for position in self.matched_positions:
             try:
                 link_index[("word", position)].append((self._register_link, None))
-            except KeyError as ex:
+            except KeyError:
                 link_index[("word", position)] = [(self._register_link, None)]
 
     def _register_link(self, dummy, word):
@@ -353,14 +366,15 @@ class Entailment(object):
     @property
     def entailed_word(self):
         """The word string that is entailed by the source words."""
-        entailed_tree = self.json.get("entailedTree", None)
+        entailed_tree = self.json.get("entailedTree")
         if entailed_tree:
-            return entailed_tree.get("word", None)
+            return entailed_tree.get("word")
 
     def __repr__(self):
         return "TextRazor Entailment:\"%s\" at positions %s" % (str(self.entailed_word), str(self.matched_positions))
 
     __str__ = generate_str()
+
 
 class RelationParam(object):
     """Represents a Param to a specific :class:`Relation`.
@@ -375,7 +389,7 @@ class RelationParam(object):
         for position in self.param_positions:
             try:
                 link_index[("word", position)].append((self._register_link, None))
-            except KeyError as ex:
+            except KeyError:
                 link_index[("word", position)] = [(self._register_link, None)]
 
     def _register_link(self, dummy, word):
@@ -412,6 +426,7 @@ class RelationParam(object):
 
     __str__ = generate_str()
 
+
 class NounPhrase(object):
     """Represents a multi-word phrase extracted from a sentence.
 
@@ -427,7 +442,7 @@ class NounPhrase(object):
         for position in self.word_positions:
             try:
                 link_index[("word", position)].append((self._register_link, None))
-            except KeyError as ex:
+            except KeyError:
                 link_index[("word", position)] = [(self._register_link, None)]
 
     def _register_link(self, dummy, word):
@@ -446,7 +461,8 @@ class NounPhrase(object):
     def __repr__(self):
         return "TextRazor NounPhrase at positions %s" % (str(self.words))
 
-    __str__ = generate_str(banned_properties=["word_positions",])
+    __str__ = generate_str(banned_properties=["word_positions", ])
+
 
 class Property(object):
     """Represents a property relation extracted from raw text.  A property implies an "is-a" or "has-a" relationship
@@ -466,13 +482,13 @@ class Property(object):
         for position in self.predicate_positions:
             try:
                 link_index[("word", position)].append((self._register_link, True))
-            except KeyError as ex:
+            except KeyError:
                 link_index[("word", position)] = [(self._register_link, True)]
 
         for position in self.property_positions:
             try:
                 link_index[("word", position)].append((self._register_link, False))
-            except KeyError as ex:
+            except KeyError:
                 link_index[("word", position)] = [(self._register_link, False)]
 
     def _register_link(self, is_predicate, word):
@@ -496,7 +512,8 @@ class Property(object):
     def __repr__(self):
         return "TextRazor Property at positions %s" % (str(self.predicate_positions))
 
-    __str__ = generate_str(banned_properties=["predicate_positions",])
+    __str__ = generate_str(banned_properties=["predicate_positions", ])
+
 
 class Relation(object):
     """Represents a grammatical relation between words.  Typically owns a number of
@@ -516,7 +533,7 @@ class Relation(object):
         for position in self.predicate_positions:
             try:
                 link_index[("word", position)].append((self._register_link, None))
-            except KeyError as ex:
+            except KeyError:
                 link_index[("word", position)] = [(self._register_link, None)]
 
     def _register_link(self, dummy, word):
@@ -534,7 +551,7 @@ class Relation(object):
     def __repr__(self):
         return "TextRazor Relation at positions %s" % (str(self.predicate_words))
 
-    __str__ = generate_str(banned_properties=["predicate_positions",])
+    __str__ = generate_str(banned_properties=["predicate_positions", ])
 
 
 class Word(object):
@@ -650,6 +667,7 @@ class Word(object):
 
     __str__ = generate_str()
 
+
 class Sentence(object):
     """Represents a single sentence extracted by TextRazor."""
 
@@ -675,17 +693,17 @@ class Sentence(object):
 
         for word in self._words:
             parent_position = word.parent_position
-            if None != parent_position and parent_position >= 0:
+            if parent_position is not None and parent_position >= 0:
                 word._set_parent(word_positions[parent_position])
-            else:
+            elif word.part_of_speech not in ("$", "``", "''", "(", ")", ",", "--", ".", ":"):
                 # Punctuation does not get attached to any parent, any non punctuation part of speech
                 # must be the root word.
-                if word.part_of_speech not in ("$", "``", "''", "(", ")", ",", "--", ".", ":"):
-                    self._root_word = word
+                self._root_word = word
 
     root_word = proxy_member("_root_word", """The root word of this sentence if "dependency-trees" extractor was requested""")
 
     words = proxy_member("_words", """List of all the :class:`Word` in this sentence""")
+
 
 class CustomAnnotation(object):
 
@@ -696,7 +714,7 @@ class CustomAnnotation(object):
             for link in key_value.get("links", []):
                 try:
                     link_index[(link["annotationName"], link["linkedId"])].append((self._register_link, link))
-                except Exception as ex:
+                except Exception:
                     link_index[(link["annotationName"], link["linkedId"])] = [(self._register_link, link)]
 
     def _register_link(self, link, annotation):
@@ -704,8 +722,8 @@ class CustomAnnotation(object):
 
         new_custom_annotation_list = []
         try:
-            new_custom_annotation_list = getattr(annotation, self.name());
-        except Exception as ex:
+            new_custom_annotation_list = getattr(annotation, self.name())
+        except Exception:
             pass
         new_custom_annotation_list.append(self)
         setattr(annotation, self.name(), new_custom_annotation_list)
@@ -721,7 +739,7 @@ class CustomAnnotation(object):
                 for link in key_value.get("links", []):
                     try:
                         yield link["linked"]
-                    except Exception as ex:
+                    except Exception:
                         yield link
                 for int_value in key_value.get("intValue", []):
                     yield int_value
@@ -744,7 +762,7 @@ class CustomAnnotation(object):
         for key_value in self.json["contents"]:
             try:
                 out.append("Param %s:" % key_value["key"])
-            except Exception as ex:
+            except Exception:
                 out.append("Param (unlabelled):")
             out.append("\n")
             for link in self.__getattr__(key_value["key"]):
@@ -752,6 +770,7 @@ class CustomAnnotation(object):
                 out.append("\n")
 
         return " ".join(out)
+
 
 class TextRazorResponse(object):
     """Represents a processed response from TextRazor."""
@@ -806,7 +825,6 @@ class TextRazorResponse(object):
 
             if "categories" in self.json["response"]:
                 self._categories = [ScoredCategory(category_json) for category_json in self.json["response"]["categories"]]
-
 
     @property
     def raw_text(self):
@@ -884,8 +902,9 @@ class TextRazorResponse(object):
         return [custom_annotation.name() for custom_annotation in self._custom_annotations]
 
     def summary(self):
-        return """Request processed in: %s seconds.  Num Sentences:%s""" % \
-                (self.json["time"], len(self.json["response"]["sentences"]))
+        return """Request processed in: %s seconds.  Num Sentences:%s""" % (
+            self.json["time"], len(self.json["response"]["sentences"])
+        )
 
     def __getattr__(self, attr):
         exists = False
@@ -896,6 +915,7 @@ class TextRazorResponse(object):
 
         if not exists:
             raise AttributeError("TextRazor response has no annotation %r" % attr)
+
 
 class AllDictionaryEntriesResponse(object):
 
@@ -915,6 +935,7 @@ class AllDictionaryEntriesResponse(object):
     offset = proxy_response_json("offset", 0, """
     Offset into the full list of DictionaryEntry that this result set started from.
     """)
+
 
 class DictionaryManager(TextRazorConnection):
 
@@ -939,7 +960,7 @@ class DictionaryManager(TextRazorConnection):
             if not hasattr(new_dictionary, key):
                 valid_options = ",".join(name for name, obj in Dictionary.__dict__.items() if isinstance(obj, proxy_response_json))
 
-                raise TextRazorAnalysisException("Cannot create dictionary, unexpected param: %s. Supported params: %s"  % (key, valid_options))
+                raise TextRazorAnalysisException("Cannot create dictionary, unexpected param: %s. Supported params: %s" % (key, valid_options))
 
             setattr(new_dictionary, key, value)
 
@@ -1008,8 +1029,10 @@ class DictionaryManager(TextRazorConnection):
         """
 
         params = {}
-        if limit: params['limit'] = limit
-        if offset: params['offset'] = offset
+        if limit:
+            params['limit'] = limit
+        if offset:
+            params['offset'] = offset
 
         all_path = "".join([self.path, dictionary_id, "/_all?", urlencode(params)])
 
@@ -1038,7 +1061,7 @@ class DictionaryManager(TextRazorConnection):
                 if not hasattr(new_entry, key):
                     valid_options = ",".join(name for name, obj in DictionaryEntry.__dict__.items() if isinstance(obj, proxy_response_json))
 
-                    raise TextRazorAnalysisException("Cannot create dictionary entry, unexpected param: %s. Supported params: %s"  % (key, valid_options))
+                    raise TextRazorAnalysisException("Cannot create dictionary entry, unexpected param: %s. Supported params: %s" % (key, valid_options))
 
                 setattr(new_entry, key, value)
 
@@ -1084,6 +1107,7 @@ class DictionaryManager(TextRazorConnection):
             raise TextRazorAnalysisException("TextRazor was unable to retrieve dictionary entry with dictionary id: %s, entry id: %s Error: %s" % (dictionary_id, entry_id, str(response)))
 
         return DictionaryEntry(response["response"])
+
 
 class DictionaryEntry(object):
 
@@ -1142,6 +1166,7 @@ class Dictionary(object):
     Defaults to 'any'.
     """)
 
+
 class AllCategoriesResponse(object):
 
     def __init__(self, json):
@@ -1159,6 +1184,7 @@ class AllCategoriesResponse(object):
     offset = proxy_response_json("offset", 0, """
     Offset into the full list of Category that this result set started from.
     """)
+
 
 class ScoredCategory(object):
 
@@ -1180,6 +1206,7 @@ class ScoredCategory(object):
     score = proxy_response_json("score", 0, """
     The score TextRazor has assigned to this category, between 0 and 1.
     """)
+
 
 class Category(object):
     path = "categories/"
@@ -1222,7 +1249,7 @@ class ClassifierManager(TextRazorConnection):
                 if not hasattr(new_category, key):
                     valid_options = ",".join(name for name, obj in Category.__dict__.items() if isinstance(obj, proxy_response_json))
 
-                    raise TextRazorAnalysisException("Cannot create category, unexpected param: %s. Supported params: %s"  % (key, valid_options))
+                    raise TextRazorAnalysisException("Cannot create category, unexpected param: %s. Supported params: %s" % (key, valid_options))
 
                 setattr(new_category, key, value)
 
@@ -1249,8 +1276,10 @@ class ClassifierManager(TextRazorConnection):
         """
 
         params = {}
-        if limit: params['limit'] = limit
-        if offset: params['offset'] = offset
+        if limit:
+            params['limit'] = limit
+        if offset:
+            params['offset'] = offset
 
         all_path = "".join([self.path, classifier_id, "/_all?", urlencode(params)])
 
@@ -1276,6 +1305,7 @@ class ClassifierManager(TextRazorConnection):
             raise TextRazorAnalysisException("TextRazor was unable to retrieve category for classifier id: %s, Error: %s" % (classifier_id, str(response)))
 
         return Category(response["response"])
+
 
 class TextRazor(TextRazorConnection):
     """
@@ -1437,7 +1467,7 @@ class TextRazor(TextRazorConnection):
         self.classifier_max_categories = max_categories
 
     def _add_optional_param(self, post_data, param, value):
-        if value != None:
+        if value is not None:
             post_data.append((param, value))
 
     def _build_post_data(self):
