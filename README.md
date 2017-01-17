@@ -30,7 +30,7 @@ Getting Started
 		print entity
 	```
 
-For full API documentation visit [https://www.textrazor.com/documentation_python](https://www.textrazor.com/documentation_python).
+For full API documentation visit [https://www.textrazor.com/docs/python](https://www.textrazor.com/docs/python).
 
 If you have any questions please get in touch at support@textrazor.com
 
