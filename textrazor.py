@@ -1,5 +1,5 @@
 """
-Copyright (c) 2015 TextRazor, https://www.textrazor.com/
+Copyright (c) 2017 TextRazor, https://www.textrazor.com/
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the "Software"),
@@ -22,12 +22,12 @@ THE SOFTWARE.
 """
 
 try:
-    from urllib2 import Request, urlopen, HTTPError, URLError
+    from urllib2 import Request, urlopen, HTTPError
     from urllib import urlencode
 except ImportError:
     from urllib.request import Request, urlopen
     from urllib.parse import urlencode
-    from urllib.error import HTTPError, URLError
+    from urllib.error import HTTPError
 
 import warnings
 
@@ -208,8 +208,6 @@ class TextRazorConnection(object):
             response = urlopen(request)
         except HTTPError as e:
             raise TextRazorAnalysisException("TextRazor returned HTTP Code %d: %s" % (e.code, e.read()))
-        except URLError:
-            raise TextRazorAnalysisException("Could not connect to TextRazor")
 
         if response.info().get('Content-Encoding') == 'gzip':
             buf = IOStream(response.read())
@@ -660,7 +658,9 @@ class Word(object):
 
     noun_phrases = proxy_member("_noun_phrases", "List of :class:`NounPhrase` that this word is a member of.")
 
-    senses = proxy_response_json("senses", [], "List of (sense, score) tuples representing scores of each Wordnet sense this this word may be a part of.")
+    senses = proxy_response_json("senses", [], "List of {'sense', 'score'} dictionaries representing scores of each Wordnet sense this this word may be a part of.")
+
+    spelling_suggestions = proxy_response_json("spellingSuggestions", [], "List of {'suggestion', 'score'} dictionaries representing scores of each spelling suggestion that might replace this word. This property requires the \"spelling\" extractor to be sent with your request.")
 
     def __repr__(self):
         return "TextRazor Word:\"%s\" at position %s" % ((self.token).encode("utf-8"), str(self.position))
@@ -835,6 +835,11 @@ class TextRazorResponse(object):
     def cleaned_text(self):
         """"When the set_cleanup_return_cleaned option is enabled, contains the input text after any cleanup/article extraction."""
         return self.json["response"].get("cleanedText", "")
+
+    @property
+    def language(self):
+        """"The ISO-639-2 language used to analyze this document, either explicitly provided as the languageOverride, or as detected by the language detector."""
+        return self.json["response"].get("language", "")
 
     @property
     def custom_annotation_output(self):
@@ -1305,6 +1310,58 @@ class ClassifierManager(TextRazorConnection):
             raise TextRazorAnalysisException("TextRazor was unable to retrieve category for classifier id: %s, Error: %s" % (classifier_id, str(response)))
 
         return Category(response["response"])
+
+class Account(object):
+
+    def __init__(self, json):
+        self.json = json
+
+    plan = proxy_response_json("plan", "", """
+    The ID of your current subscription plan.
+    """)
+
+    concurrent_request_limit = proxy_response_json("concurrentRequestLimit", 0, """
+    The maximum number of requests your account can make at the same time.
+    """)
+
+    concurrent_requests_used = proxy_response_json("concurrentRequestsUsed", 0, """
+    The number of requests currently being processed by your account.
+    """)
+
+    plan_daily_included_requests = proxy_response_json("planDailyRequestsIncluded", 0, """
+    The daily number of requests included with your subscription plan.
+    """)
+
+    requests_used_today = proxy_response_json("requestsUsedToday", 0, """
+    The total number of requests that have been made today.
+    """)
+
+class AccountManager(TextRazorConnection):
+
+    path = "account/"
+
+    def __init__(self, api_key=None):
+        super(AccountManager, self).__init__(api_key)
+
+    def get_account(self):
+        """ Retrieves the Account settings and realtime usage statistics for your account.
+
+        This call does not count towards your daily request or concurrency limits.
+
+        >>> import textrazor
+        >>> textrazor.api_key = "YOUR_API_KEY_HERE"
+        >>>
+        >>> account_manager = textrazor.AccountManager()
+        >>>
+        >>> print account_manager.get_account().requests_used_today
+        """
+
+        response = self.do_request(self.path, method="GET")
+
+        if "ok" in response and not response["ok"]:
+            raise TextRazorAnalysisException("TextRazor was unable to retrieve your account details, Error: %s" % str(response))
+
+        return Account(response["response"])
 
 
 class TextRazor(TextRazorConnection):
