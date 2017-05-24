@@ -280,6 +280,8 @@ class Entity(object):
 
     id = proxy_response_json("entityId", None, "The disambiguated Wikipedia ID for this entity, or None if this entity could not be disambiguated.")
 
+    english_id = proxy_response_json("entityEnglishId", None, "The disambiguated entityId in the English Wikipedia, where a link between localized and English ID could be found. None if either the entity could not be linked, or where a language link did not exist.")
+
     freebase_id = proxy_response_json("freebaseId", None, "The disambiguated Freebase ID for this entity, or None if either this entity could not be disambiguated, or has no Freebase link.")
 
     wikidata_id = proxy_response_json("wikidataId", None, "The disambiguated Wikidata QID for this entity, or None if either this entity could not be disambiguated, or has no Freebase link.")
