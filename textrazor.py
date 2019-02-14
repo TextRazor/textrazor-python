@@ -1,5 +1,5 @@
 """
-Copyright (c) 2017 TextRazor, https://www.textrazor.com/
+Copyright (c) 2019 TextRazor, https://www.textrazor.com/
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the "Software"),
@@ -313,6 +313,14 @@ class Entity(object):
 
     data = proxy_response_json("data", {}, """Dictionary containing enriched data found for this entity.
     This is either as a result of an enrichment query, or as uploaded as part of a custom Entity Dictionary.""")
+
+    crunchbase_id = proxy_response_json("crunchbaseId", None, "The disambiguated Crunchbase ID for this entity. None if either the entity could not be linked, or the entity was not a Company type.")
+
+    lei = proxy_response_json("lei", None, "The disambiguated Legal Entity Identifier for this entity. None if either the entity could not be linked, or the entity was not a Company type.")
+
+    figi = proxy_response_json("figi", None, "The disambiguated Open FIGI for this entity. None if either the entity could not be linked, or the entity was not a Company type.")
+
+    permid = proxy_response_json("permid", None, "The disambiguated Thomson Reuters Open PermID for this entity. None if either the entity could not be linked, or the entity was not a Company type.")
 
     @property
     def matched_words(self):
