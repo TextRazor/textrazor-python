@@ -1,5 +1,5 @@
 """
-Copyright (c) 2019 TextRazor, https://www.textrazor.com/
+Copyright (c) 2020 TextRazor, https://www.textrazor.com/
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the "Software"),
@@ -99,26 +99,19 @@ class proxy_member(object):
     def __get__(self, instance, owner=None):
         return getattr(instance, self.attr_name)
 
+def _generate_str(instance, banned_properties=[]):
+    out = ["TextRazor", type(instance).__name__]
 
-class generate_str(object):
-    def __init__(self, banned_properties=[]):
-        self.banned_properties = banned_properties
+    try:
+        out.extend(["with id:", repr(instance.id), "\n"])
+    except AttributeError:
+        out.extend([":\n", ])
 
-    def __get__(self, instance, owner=None):
-        out = ["TextRazor ", type(instance).__name__]
+    for prop in dir(instance):
+        if not prop.startswith("_") and prop != "id" and prop not in banned_properties:
+            out.extend([prop, ":", repr(getattr(instance, prop)), "\n"])
 
-        try:
-            encoded_id = instance.id.encode("utf-8")
-            out.extend([" with id:", encoded_id, "\n"])
-        except Exception:
-            out.extend([":\n", ])
-
-        for property in dir(instance):
-            if not property.startswith("_") and property != "id" and property not in self.banned_properties:
-                out.extend([property, ":", repr(getattr(instance, property)), "\n"])
-
-        return " ".join(out)
-
+    return " ".join(out)
 
 class TextRazorConnection(object):
 
@@ -243,7 +236,8 @@ class Topic(object):
 
     score = proxy_response_json("score", None, """The contextual relevance of this Topic to your document.""")
 
-    __str__ = generate_str()
+    def __str__(self):
+        return _generate_str(self)
 
     def __repr__(self):
         return "TextRazor Topic %s with label %s" % (str(self.id), str(self.label))
@@ -330,8 +324,8 @@ class Entity(object):
     def __repr__(self):
         return "TextRazor Entity %s at positions %s" % (self.id.encode("utf-8"), str(self.matched_positions))
 
-    __str__ = generate_str()
-
+    def __str__(self):
+        return _generate_str(self)
 
 class Entailment(object):
     """Represents a single "entailment" derived from the source text.
@@ -381,7 +375,8 @@ class Entailment(object):
     def __repr__(self):
         return "TextRazor Entailment:\"%s\" at positions %s" % (str(self.entailed_word), str(self.matched_positions))
 
-    __str__ = generate_str()
+    def __str__(self):
+        return _generate_str(self)
 
 
 class RelationParam(object):
@@ -432,7 +427,8 @@ class RelationParam(object):
     def __repr__(self):
         return "TextRazor RelationParam:\"%s\" at positions %s" % (str(self.relation), str(self.param_words))
 
-    __str__ = generate_str()
+    def __str__(self):
+        return _generate_str(self)
 
 
 class NounPhrase(object):
@@ -469,8 +465,8 @@ class NounPhrase(object):
     def __repr__(self):
         return "TextRazor NounPhrase at positions %s" % (str(self.words))
 
-    __str__ = generate_str(banned_properties=["word_positions", ])
-
+    def __str__(self):
+        return _generate_str(self, banned_properties=["word_positions", ])
 
 class Property(object):
     """Represents a property relation extracted from raw text.  A property implies an "is-a" or "has-a" relationship
@@ -520,8 +516,8 @@ class Property(object):
     def __repr__(self):
         return "TextRazor Property at positions %s" % (str(self.predicate_positions))
 
-    __str__ = generate_str(banned_properties=["predicate_positions", ])
-
+    def __str__(self):
+        return _generate_str(self, banned_properties=["predicate_positions", ])
 
 class Relation(object):
     """Represents a grammatical relation between words.  Typically owns a number of
@@ -559,8 +555,8 @@ class Relation(object):
     def __repr__(self):
         return "TextRazor Relation at positions %s" % (str(self.predicate_words))
 
-    __str__ = generate_str(banned_properties=["predicate_positions", ])
-
+    def __str__(self):
+        return _generate_str(self, banned_properties=["predicate_positions", ])
 
 class Word(object):
     """Represents a single Word (token) extracted by TextRazor.
@@ -675,8 +671,8 @@ class Word(object):
     def __repr__(self):
         return "TextRazor Word:\"%s\" at position %s" % ((self.token).encode("utf-8"), str(self.position))
 
-    __str__ = generate_str()
-
+    def __str__(self):
+        return _generate_str(self)
 
 class Sentence(object):
     """Represents a single sentence extracted by TextRazor."""
