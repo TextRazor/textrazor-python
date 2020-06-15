@@ -27,7 +27,7 @@ Getting Started
 	response = client.analyze("Barclays misled shareholders and the public about one of the biggest investments in the bank's history, a BBC Panorama investigation has found.")
 
 	for entity in response.entities():
-		print entity
+		print(entity)
 	```
 
 For full API documentation visit [https://www.textrazor.com/docs/python](https://www.textrazor.com/docs/python).
