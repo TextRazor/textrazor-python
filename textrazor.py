@@ -1,5 +1,5 @@
 """
-Copyright (c) 2020 TextRazor, https://www.textrazor.com/
+Copyright (c) 2023 TextRazor, https://www.textrazor.com/
 
 Permission is hereby granted, free of charge, to any person obtaining
 a copy of this software and associated documentation files (the "Software"),
@@ -210,7 +210,7 @@ class TextRazorConnection(object):
         return json.loads(response_text)
 
 
-class TextRazorAnalysisException(BaseException):
+class TextRazorAnalysisException(Exception):
     pass
 
 
